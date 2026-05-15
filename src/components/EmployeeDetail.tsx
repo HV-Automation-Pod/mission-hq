@@ -2,7 +2,7 @@
 
 import { Employee, STATUS_COLORS } from "@/lib/types";
 import { computeEmployeeAnalytics } from "@/lib/utils";
-import { X, CheckCircle2, XCircle, AlertTriangle, Building2, Home, MapPin, ArrowLeftRight, Plane, TreePalm, AlertCircle, Mail, Briefcase, Flame, Trophy } from "lucide-react";
+import { X, CheckCircle2, XCircle, AlertTriangle, Building2, Home, MapPin, ArrowLeftRight, Plane, TreePalm, Globe, Mail, Briefcase, Flame, Trophy } from "lucide-react";
 import { useState } from "react";
 
 interface Props {
@@ -24,6 +24,7 @@ export default function EmployeeDetail({ employee, dates, onClose }: Props) {
     { label: "Split", value: analytics.splitDay, icon: <ArrowLeftRight size={13} />, color: "text-violet-600 dark:text-violet-400", bg: "bg-violet-50 dark:bg-violet-900/15 border-violet-200 dark:border-violet-800/40" },
     { label: "Travel", value: analytics.travel, icon: <Plane size={13} />, color: "text-pink-600 dark:text-pink-400", bg: "bg-pink-50 dark:bg-pink-900/15 border-pink-200 dark:border-pink-800/40" },
     { label: "Leave", value: analytics.leave, icon: <TreePalm size={13} />, color: "text-gray-500 dark:text-gray-400", bg: "bg-gray-50 dark:bg-slate-800/50 border-gray-200 dark:border-slate-700/50" },
+    { label: "Anywhere", value: analytics.anywhere, icon: <Globe size={13} />, color: "text-cyan-600 dark:text-cyan-400", bg: "bg-cyan-50 dark:bg-cyan-900/15 border-cyan-200 dark:border-cyan-800/40" },
   ].filter((s) => s.value > 0); // Only show statuses that have data
 
   const recentDates = dates.slice(-30);

@@ -1,4 +1,4 @@
-export type LocationStatus = "Office" | "Home" | "Client Location" | "Split Day" | "Travel" | "Leave" | "Pending";
+export type LocationStatus = "Office" | "Home" | "Client Location" | "Split Day" | "Travel" | "Leave" | "Anywhere" | "Pending";
 
 export interface Employee {
   name: string;
@@ -45,6 +45,7 @@ export interface EmployeeAnalytics {
   splitDay: number;
   travel: number;
   leave: number;
+  anywhere: number;
   pending: number;
   totalDays: number;
   complianceRate: number; // percentage of weeks meeting 4-day requirement
@@ -62,6 +63,7 @@ export const STATUS_COLORS: Record<string, string> = {
   "Split Day": "#8b5cf6",
   "Travel": "#ec4899",
   "Leave": "#6b7280",
+  "Anywhere": "#06b6d4",
   "Pending": "#ef4444",
 };
 
@@ -72,5 +74,6 @@ export const STATUS_BG_COLORS: Record<string, string> = {
   "Split Day": "bg-violet-100 text-violet-800",
   "Travel": "bg-pink-100 text-pink-800",
   "Leave": "bg-gray-100 text-gray-600",
+  "Anywhere": "bg-cyan-100 text-cyan-800",
   "Pending": "bg-red-100 text-red-800",
 };

@@ -102,14 +102,14 @@ export function DailyTrendChart({ employees, dates }: TrendProps) {
     const hasData = dateSet.has(dateStr);
 
     if (holiday) {
-      return { date: label, Office: 0, Home: 0, "Client Location": 0, "Split Day": 0, Travel: 0, Leave: 0, Pending: 0, Holiday: employees.length };
+      return { date: label, Office: 0, Home: 0, "Client Location": 0, "Split Day": 0, Travel: 0, Leave: 0, Anywhere: 0, Pending: 0, Holiday: employees.length };
     }
 
     if (!isPast || !hasData) {
-      return { date: label, Office: 0, Home: 0, "Client Location": 0, "Split Day": 0, Travel: 0, Leave: 0, Pending: 0, Holiday: 0 };
+      return { date: label, Office: 0, Home: 0, "Client Location": 0, "Split Day": 0, Travel: 0, Leave: 0, Anywhere: 0, Pending: 0, Holiday: 0 };
     }
 
-    const counts: Record<string, number> = { Office: 0, Home: 0, "Client Location": 0, "Split Day": 0, Travel: 0, Leave: 0, Pending: 0 };
+    const counts: Record<string, number> = { Office: 0, Home: 0, "Client Location": 0, "Split Day": 0, Travel: 0, Leave: 0, Anywhere: 0, Pending: 0 };
     employees.forEach((emp) => {
       const status = emp.statuses[dateStr];
       if (status && status in counts) counts[status]++;
@@ -231,6 +231,7 @@ export function DailyTrendChart({ employees, dates }: TrendProps) {
               <Bar dataKey="Split Day" stackId="a" fill={STATUS_COLORS["Split Day"]} />
               <Bar dataKey="Travel" stackId="a" fill={STATUS_COLORS.Travel} />
               <Bar dataKey="Leave" stackId="a" fill={STATUS_COLORS.Leave} />
+              <Bar dataKey="Anywhere" stackId="a" fill={STATUS_COLORS.Anywhere} />
               <Bar dataKey="Pending" stackId="a" fill={STATUS_COLORS.Pending} radius={[3, 3, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>
@@ -318,7 +319,7 @@ function MonthCalendarHeatmap({ employees, dates }: { employees: Employee[]; dat
     const isFuture = isBefore(today, day) && dateStr !== todayStr;
     const isToday = dateStr === todayStr;
     const hasData = dateSet.has(dateStr);
-    const counts: Record<string, number> = { Office: 0, Home: 0, "Client Location": 0, "Split Day": 0, Travel: 0, Leave: 0, Pending: 0 };
+    const counts: Record<string, number> = { Office: 0, Home: 0, "Client Location": 0, "Split Day": 0, Travel: 0, Leave: 0, Anywhere: 0, Pending: 0 };
 
     if (inMonth && !isFuture && !isHoliday && hasData) {
       employees.forEach((emp) => {
@@ -613,7 +614,7 @@ function DayCell({ stat, isBest }: { stat: DayStat; isBest: boolean }) {
               {OFFICE_KEYS.map((k) => counts[k] > 0 && (
                 <div key={k} style={{ width: `${(counts[k] / dayCount) * 100}%`, background: STATUS_COLORS[k] }} />
               ))}
-              {(["Home", "Travel", "Leave", "Pending"] as const).map((k) => counts[k] > 0 && (
+              {(["Home", "Travel", "Leave", "Anywhere", "Pending"] as const).map((k) => counts[k] > 0 && (
                 <div key={k} style={{ width: `${(counts[k] / dayCount) * 100}%`, background: STATUS_COLORS[k], opacity: 0.55 }} />
               ))}
             </div>

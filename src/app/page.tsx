@@ -198,8 +198,8 @@ export default function Dashboard() {
   }, [analytics, filteredEmployees, selectedDate]);
 
   const handleExport = useCallback(() => {
-    const headers = ["Name", "Email", "Department", "Office", "Home", "Client Location", "Split Day", "Travel", "Leave", "Pending", "Compliance %"];
-    const rows = analytics.map((a) => [a.name, a.email, a.department, a.office, a.home, a.clientLocation, a.splitDay, a.travel, a.leave, a.pending, Math.round(a.complianceRate)]);
+    const headers = ["Name", "Email", "Department", "Office", "Home", "Client Location", "Split Day", "Travel", "Leave", "Anywhere", "Pending", "Compliance %"];
+    const rows = analytics.map((a) => [a.name, a.email, a.department, a.office, a.home, a.clientLocation, a.splitDay, a.travel, a.leave, a.anywhere, a.pending, Math.round(a.complianceRate)]);
     const csv = [headers.join(","), ...rows.map((r) => r.join(","))].join("\n");
     const blob = new Blob([csv], { type: "text/csv" });
     const url = URL.createObjectURL(blob);
@@ -594,6 +594,7 @@ export default function Dashboard() {
                             <span className={`text-[10px] px-2 py-0.5 rounded-md font-medium ${
                               todayStatus === "Office" ? "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400" :
                               todayStatus === "Home" ? "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-400" :
+                              todayStatus === "Anywhere" ? "bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-400" :
                               todayStatus === "Pending" || todayStatus === "No Data" ? "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400" :
                               "bg-gray-100 text-gray-600 dark:bg-slate-800 dark:text-gray-400"
                             }`}>{todayStatus === "Client Location" ? "Client" : todayStatus}</span>

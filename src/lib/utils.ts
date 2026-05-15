@@ -50,7 +50,7 @@ export function computeEmployeeAnalytics(
   dates: string[],
   requiredDays: number = 4
 ): EmployeeAnalytics {
-  let office = 0, home = 0, clientLocation = 0, splitDay = 0, travel = 0, leave = 0, pending = 0;
+  let office = 0, home = 0, clientLocation = 0, splitDay = 0, travel = 0, leave = 0, anywhere = 0, pending = 0;
 
   dates.forEach((d) => {
     const status = employee.statuses[d];
@@ -62,6 +62,7 @@ export function computeEmployeeAnalytics(
       case "Split Day": splitDay++; break;
       case "Travel": travel++; break;
       case "Leave": leave++; break;
+      case "Anywhere": anywhere++; break;
       case "Pending": pending++; break;
     }
   });
@@ -115,8 +116,9 @@ export function computeEmployeeAnalytics(
     splitDay,
     travel,
     leave,
+    anywhere,
     pending,
-    totalDays: office + home + clientLocation + splitDay + travel + leave + pending,
+    totalDays: office + home + clientLocation + splitDay + travel + leave + anywhere + pending,
     complianceRate,
     weeklyCompliance,
     currentStreak,

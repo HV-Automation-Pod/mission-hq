@@ -332,6 +332,7 @@ code, kbd, .font-mono {
 .stat-card-violet::before { background: linear-gradient(180deg, #8b5cf6, #7c3aed); }
 .stat-card-pink::before { background: linear-gradient(180deg, #ec4899, #db2777); }
 .stat-card-gray::before { background: linear-gradient(180deg, #94a3b8, #64748b); }
+.stat-card-cyan::before { background: linear-gradient(180deg, #06b6d4, #0891b2); }
 .stat-card-red::before { background: linear-gradient(180deg, #ef4444, #dc2626); }
 .stat-card-slate::before { background: linear-gradient(180deg, #6366f1, #4f46e5); }
 

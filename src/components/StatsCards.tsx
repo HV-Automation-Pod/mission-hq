@@ -1,7 +1,7 @@
 "use client";
 
 import { Employee } from "@/lib/types";
-import { Building2, Home, MapPin, ArrowLeftRight, Plane, TreePalm, AlertCircle, Users, TrendingUp, TrendingDown } from "lucide-react";
+import { Building2, Home, MapPin, ArrowLeftRight, Plane, TreePalm, Globe, AlertCircle, Users, TrendingUp, TrendingDown } from "lucide-react";
 
 interface Props {
   employees: Employee[];
@@ -10,8 +10,8 @@ interface Props {
 }
 
 export default function StatsCards({ employees, date, previousDate }: Props) {
-  const counts = { Office: 0, Home: 0, "Client Location": 0, "Split Day": 0, Travel: 0, Leave: 0, Pending: 0, "No Data": 0 };
-  const prevCounts = { Office: 0, Home: 0, "Client Location": 0, "Split Day": 0, Travel: 0, Leave: 0, Pending: 0, "No Data": 0 };
+  const counts = { Office: 0, Home: 0, "Client Location": 0, "Split Day": 0, Travel: 0, Leave: 0, Anywhere: 0, Pending: 0, "No Data": 0 };
+  const prevCounts = { Office: 0, Home: 0, "Client Location": 0, "Split Day": 0, Travel: 0, Leave: 0, Anywhere: 0, Pending: 0, "No Data": 0 };
 
   employees.forEach((emp) => {
     const status = emp.statuses[date] || "No Data";
@@ -41,6 +41,7 @@ export default function StatsCards({ employees, date, previousDate }: Props) {
     { label: "Split", value: counts["Split Day"], icon: <ArrowLeftRight size={16} />, accent: "stat-card-violet", iconBg: "bg-violet-100 dark:bg-violet-900/30 text-violet-600 dark:text-violet-400", prevValue: previousDate ? prevCounts["Split Day"] : undefined },
     { label: "Travel", value: counts.Travel, icon: <Plane size={16} />, accent: "stat-card-pink", iconBg: "bg-pink-100 dark:bg-pink-900/30 text-pink-600 dark:text-pink-400", prevValue: previousDate ? prevCounts.Travel : undefined },
     { label: "Leave", value: counts.Leave, icon: <TreePalm size={16} />, accent: "stat-card-gray", iconBg: "bg-gray-100 dark:bg-slate-800/80 text-gray-500 dark:text-gray-400", prevValue: previousDate ? prevCounts.Leave : undefined },
+    { label: "Anywhere", value: counts.Anywhere, icon: <Globe size={16} />, accent: "stat-card-cyan", iconBg: "bg-cyan-100 dark:bg-cyan-900/30 text-cyan-600 dark:text-cyan-400", prevValue: previousDate ? prevCounts.Anywhere : undefined },
     { label: "Pending", value: counts.Pending, icon: <AlertCircle size={16} />, accent: "stat-card-red", iconBg: "bg-red-100 dark:bg-red-900/30 text-red-500 dark:text-red-400", prevValue: previousDate ? prevCounts.Pending : undefined },
   ];
 
@@ -132,7 +133,7 @@ export default function StatsCards({ employees, date, previousDate }: Props) {
       </div>
 
       {/* Stat Cards */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2.5">
+      <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-9 gap-2.5">
         {cards.map((card) => {
           const diff = card.prevValue !== undefined ? card.value - card.prevValue : undefined;
           return (

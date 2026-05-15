@@ -1,6 +1,6 @@
 "use client";
 
-import { Building2, Home, MapPin, ArrowLeftRight, Plane, TreePalm, AlertCircle, Minus } from "lucide-react";
+import { Building2, Home, MapPin, ArrowLeftRight, Plane, TreePalm, Globe, AlertCircle, Minus } from "lucide-react";
 
 const STATUS_CONFIG: Record<string, { bg: string; icon: React.ReactNode }> = {
   "Office": {
@@ -26,6 +26,10 @@ const STATUS_CONFIG: Record<string, { bg: string; icon: React.ReactNode }> = {
   "Leave": {
     bg: "bg-gray-100 text-gray-600 dark:bg-slate-800 dark:text-gray-400",
     icon: <TreePalm size={11} />,
+  },
+  "Anywhere": {
+    bg: "bg-cyan-100 text-cyan-800 dark:bg-cyan-900/40 dark:text-cyan-400",
+    icon: <Globe size={11} />,
   },
   "Pending": {
     bg: "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-400",
