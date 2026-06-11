@@ -1,0 +1,2 @@
+[functions.mission-hq]
+verify_jwt = false
