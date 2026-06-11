@@ -226,7 +226,6 @@ SLACK_USER_TOKEN
 SLACK_CHANNEL_ID
 REMINDER_CHANNEL_ID
 ALERT_USER_ID
-HYPERFIESTA_NOTION_URL
 ```
 
 If hardcoded tokens exist in code, move them to Apps Script Properties before pushing to public/shared git.

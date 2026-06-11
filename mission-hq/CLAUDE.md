@@ -20,7 +20,6 @@ MissionHQ is an employee location/attendance tracking system for HyperVerge. It 
 | `UpdateData.js` | Writes location responses, `updateSlackProfileStatus`, `handleLocationsPayload`, `updateSlackMessage`, `updateNamesFromSlack` |
 | `SlackMessage.js` | `collectEmployeeLocationMessage`, `deleteSlackMessage`, `sendSlackConfirmationMessage` |
 | `SlackData.js` | Fetches Slack channel members into "Slack Users" sheet |
-| `Notion.js` | Sends Hyperfiesta Notion reminder to Slack channel |
 | `Analytics.js` | `calculateUserStatusCounts`, `updateAnalyticsSheet`, `countValueInEmailRow` |
 | `Delete.js` | Bulk deletes Slack messages from "Message Ts" sheet |
 | `GetAllUsers.js` | Fetches all Slack workspace users into "Users" sheet |
