@@ -20,7 +20,6 @@ const SLACK_CHANNEL_ID = getRequiredScriptProperty_("SLACK_CHANNEL_ID");
 
 const REMINDER_CHANNEL_ID = getRequiredScriptProperty_("REMINDER_CHANNEL_ID");
 const ALERT_USER_ID = getRequiredScriptProperty_("ALERT_USER_ID");
-const HYPERFIESTA_NOTION_URL = getRequiredScriptProperty_("HYPERFIESTA_NOTION_URL");
 
 const ZOHO_CLIENT_ID_PROPERTY = "ZOHO_CLIENT_ID";
 const ZOHO_CLIENT_SECRET_PROPERTY = "ZOHO_CLIENT_SECRET";

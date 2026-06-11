@@ -524,6 +524,7 @@ function syncZohoPeopleLeavesForDate(dateString) {
   if (dateColIndex === -1) throw new Error(`Date column ${dateString} not found`);
 
   const leaveEmails = getZohoPeopleLeaveEmailsForDate(dateString);
+  console.log(leaveEmails)
   let updated = 0;
 
   for (let i = 1; i < data.length; i++) {
