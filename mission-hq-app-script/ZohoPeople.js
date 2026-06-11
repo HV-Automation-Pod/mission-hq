@@ -517,39 +517,63 @@ function syncZohoPeopleLeavesForDate(dateString) {
 
   const data = sheet.getDataRange().getDisplayValues();
   const headers = data[0].map(header => header.toString().trim());
+  const nameColIndex = headers.indexOf("Full Name");
   const emailColIndex = headers.indexOf("Email Address");
   const dateColIndex = headers.indexOf(dateString);
 
   if (emailColIndex === -1) throw new Error("Column 'Email Address' not found");
   if (dateColIndex === -1) throw new Error(`Date column ${dateString} not found`);
 
+  Logger.log(`Zoho People leave sync started for ${dateString}`);
   const leaveEmails = getZohoPeopleLeaveEmailsForDate(dateString);
-  console.log(leaveEmails)
+  Logger.log(`Zoho People leave API completed for ${dateString}: ${leaveEmails.size} leave email(s) found`);
+  Logger.log(`Zoho People leave email list for ${dateString}: ${JSON.stringify(Array.from(leaveEmails))}`);
+
   let updated = 0;
+  const markedLeaves = [];
+  const skippedLeaves = [];
 
   for (let i = 1; i < data.length; i++) {
     const email = data[i][emailColIndex] ? data[i][emailColIndex].toString().trim().toLowerCase() : "";
     if (!email || !leaveEmails.has(email)) continue;
 
+    const name = nameColIndex === -1 ? "" : data[i][nameColIndex].toString().trim();
     const currentStatus = data[i][dateColIndex] ? data[i][dateColIndex].toString().trim() : "";
     if (currentStatus && currentStatus !== "Pending" && currentStatus !== "Leave") {
       Logger.log(`Skipping Zoho leave overwrite for ${email} on ${dateString}; existing status is ${currentStatus}`);
+      skippedLeaves.push({
+        row: i + 1,
+        name: name,
+        email: email,
+        existingStatus: currentStatus
+      });
       continue;
     }
 
     if (currentStatus !== "Leave") {
       sheet.getRange(i + 1, dateColIndex + 1).setValue("Leave");
       updated++;
+      markedLeaves.push({
+        row: i + 1,
+        name: name,
+        email: email
+      });
     }
   }
 
   if (updated > 0) SpreadsheetApp.flush();
-  Logger.log(`Zoho People leave sync for ${dateString}: ${updated} rows marked Leave, ${leaveEmails.size} leave emails found.`);
+  Logger.log(`Zoho People users marked Leave for ${dateString}: ${JSON.stringify(markedLeaves)}`);
+  if (skippedLeaves.length > 0) {
+    Logger.log(`Zoho People leave matches skipped for ${dateString}: ${JSON.stringify(skippedLeaves)}`);
+  }
+  Logger.log(`Zoho People leave sync completed for ${dateString}: ${updated} row(s) marked Leave, ${leaveEmails.size} leave email(s) found.`);
 
   return {
     success: true,
     date: dateString,
     leaveEmails: Array.from(leaveEmails),
+    markedLeaves: markedLeaves,
+    skippedLeaves: skippedLeaves,
     updated: updated
   };
 }

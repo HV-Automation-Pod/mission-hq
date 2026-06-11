@@ -1,13 +1,14 @@
-function collectEmployeeLocationMessage(userId, name, email) {
+function collectEmployeeLocationMessage(userId, name, email, currentStep, currentFact) {
   const url = 'https://slack.com/api/chat.postMessage';
 
-
-  const scriptProperties = PropertiesService.getScriptProperties();
-  let currentStep = parseInt(scriptProperties.getProperty('currentStep') || '0', 10);
-  let currentFact = parseInt(scriptProperties.getProperty('currentFact') || '0', 10);
-
-  Logger.log(`currentStep: ${currentStep}`);
-  Logger.log(`currentFact: ${currentFact}`);
+  if (currentStep === undefined || currentStep === null || isNaN(currentStep)) {
+    currentStep = 0;
+  }
+  if (currentFact === undefined || currentFact === null || isNaN(currentFact)) {
+    currentFact = 0;
+  }
+  currentStep = currentStep % MESSAGES.length;
+  currentFact = currentFact % TRIVIA.length;
 
   const message = MESSAGES[currentStep].replace('{name}', name);
   const trivia = TRIVIA[currentFact];
@@ -15,7 +16,7 @@ function collectEmployeeLocationMessage(userId, name, email) {
   const fullMessage = `${message}\n\n*Fun Fact:* ${trivia}`;
 
   const locations = getLocationsList();
-  Logger.log(`Retrieved locations: ${JSON.stringify(locations)}`);
+  // Logger.log(`Retrieved locations: ${JSON.stringify(locations)}`);
 
   // Check if locations are available and valid
   if (!locations || locations.length === 0 || !locations.every(item => item.location && item.value)) {
@@ -76,7 +77,7 @@ function collectEmployeeLocationMessage(userId, name, email) {
     ]
   });
 
-  Logger.log(`Sending payload to user ${userId}: ${payload}`);
+  // Logger.log(`Sending payload to user ${userId}: ${payload}`);
 
   const options = {
     method: 'post',
@@ -90,12 +91,12 @@ function collectEmployeeLocationMessage(userId, name, email) {
 
   try {
     const response = UrlFetchApp.fetch(url, options);
-    Logger.log(`HTTP response code: ${response.getResponseCode()}`);
+    // Logger.log(`HTTP response code: ${response.getResponseCode()}`);
     const jsonResponse = JSON.parse(response.getContentText());
 
     if (jsonResponse.ok) {
       const messageTimestamp = jsonResponse.ts;
-      Logger.log(`Location collection message sent successfully to user ${userId} with timestamp ${messageTimestamp}`);
+      // Logger.log(`Location collection message sent successfully to user ${userId} with timestamp ${messageTimestamp}`);
 
       // Log to a spreadsheet
       updateEmployeeMessageTS(email, messageTimestamp);

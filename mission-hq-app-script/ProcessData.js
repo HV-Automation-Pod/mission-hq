@@ -100,7 +100,7 @@ function processEmailsAndSendSlackMessage() {
         try {
           const userInfo = getUserInfoByEmail(email);
           if (!userInfo || !userInfo.id) throw new Error(`No user found for email ${email}`);
-          const result = collectEmployeeLocationMessage(userInfo.id, name, email);
+          const result = collectEmployeeLocationMessage(userInfo.id, name, email, currentStep, currentFact);
           if (result.success) {
             sheet.getRange(i + 1, dateColIndex + 1).setValue("Pending");
             SpreadsheetApp.flush();
