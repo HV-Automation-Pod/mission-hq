@@ -1,3 +1,17 @@
+function testCollectEmployeeLocationMessageToAlertUser() {
+  const props = PropertiesService.getScriptProperties();
+  const currentStep = parseInt(props.getProperty('currentStep') || '0', 10);
+  const currentFact = parseInt(props.getProperty('currentFact') || '0', 10);
+
+  return collectEmployeeLocationMessage(
+    ALERT_USER_ID,
+    "Test User",
+    "test@example.com",
+    currentStep,
+    currentFact
+  );
+}
+
 function collectEmployeeLocationMessage(userId, name, email, currentStep, currentFact) {
   const url = 'https://slack.com/api/chat.postMessage';
 
