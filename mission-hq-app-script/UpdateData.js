@@ -315,7 +315,12 @@ function handleLocationsPayload(payload, actionValue, userEmail, channelId, mess
     // Update the original message
     updateSlackMessage(channelId, messageTimestamp, confirmationMessage);
 
-    updateSlackProfileStatus(userId, location, date);
+    // Coimbatore-based employees should not get the WFH status set.
+    const baseLocation = getEmployeeBaseLocationByEmail_(userEmail);
+    const skipWfhStatus = location === "Home" && baseLocation.toLowerCase() === "coimbatore";
+    if (!skipWfhStatus) {
+      updateSlackProfileStatus(userId, location, date);
+    }
     return updateLocationByEmailID(userEmail, location, date);
 
   } catch (error) {
@@ -324,6 +329,32 @@ function handleLocationsPayload(payload, actionValue, userEmail, channelId, mess
       success: false,
       message: "Exception occurred: " + error.message
     };
+  }
+}
+
+// Reads the employee's base "Location" (column D) from the MissionHQ Log sheet by email.
+function getEmployeeBaseLocationByEmail_(email) {
+  try {
+    if (!email) return "";
+    const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CANDIDATE_SHEET_NAME);
+    if (!sheet) return "";
+
+    const data = sheet.getDataRange().getDisplayValues();
+    const headers = data[0].map(h => h.toString().toLowerCase().trim());
+    const emailColIndex = headers.indexOf("email address");
+    const locationColIndex = headers.indexOf("location");
+    if (emailColIndex === -1 || locationColIndex === -1) return "";
+
+    const target = email.toString().trim().toLowerCase();
+    for (let i = 1; i < data.length; i++) {
+      if (data[i][emailColIndex].toString().trim().toLowerCase() === target) {
+        return data[i][locationColIndex] ? data[i][locationColIndex].toString().trim() : "";
+      }
+    }
+    return "";
+  } catch (error) {
+    logToDumpSheet("Error in getEmployeeBaseLocationByEmail_: " + error.message);
+    return "";
   }
 }
 
