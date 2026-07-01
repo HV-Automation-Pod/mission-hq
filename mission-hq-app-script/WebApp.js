@@ -14,9 +14,6 @@ function doGet(e) {
       case "syncZohoPeopleLeaves":
         result = e.parameter.date ? syncZohoPeopleLeavesForDate(e.parameter.date) : syncTodayZohoPeopleLeaves();
         break;
-      case "syncZohoAttendance":
-        result = e.parameter.date ? syncAttendanceToZohoForDate(e.parameter.date) : syncTodayAttendanceToZoho();
-        break;
       case "all":
         result = getAllEmployeeData();
         break;
@@ -36,7 +33,7 @@ function doGet(e) {
         result = getSummaryData();
         break;
       default:
-        result = { error: "Invalid action. Use: all, today, daterange, departments, analytics, summary, zohoPeopleAuthUrl, syncZohoPeopleLeaves, syncZohoAttendance" };
+        result = { error: "Invalid action. Use: all, today, daterange, departments, analytics, summary, zohoPeopleAuthUrl, syncZohoPeopleLeaves" };
     }
 
     return ContentService.createTextOutput(JSON.stringify(result))
