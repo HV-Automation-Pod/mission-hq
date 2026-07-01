@@ -98,6 +98,7 @@ ProcessData.js     Daily prompt/reminder flows
 SlackMessage.js    Slack message block builders and send helpers
 UpdateData.js      Slack payload handling and sheet/profile updates
 ZohoPeople.js      Zoho People OAuth and leave sync
+ZohoAttendance.js  Push MissionHQ attendance into Zoho People (bulk import)
 WebApp.js          doGet API for dashboard and leave sync endpoints
 GetData.js         Sheet/user lookup helpers
 Analytics.js       Analytics helpers
@@ -164,7 +165,10 @@ Zoho People OAuth scopes:
 ZOHOPEOPLE.leave.READ
 ZOHOPEOPLE.forms.READ
 ZOHOPEOPLE.employee.ALL
+ZOHOPEOPLE.attendance.ALL
 ```
+
+`ZOHOPEOPLE.attendance.ALL` is required for the attendance check-in/check-out push API. After adding it, re-run `startZohoPeopleAuthorization()` (with admin consent) to mint a fresh refresh token that carries the new scope.
 
 Required Apps Script Properties:
 
@@ -182,6 +186,7 @@ Optional Apps Script Properties:
 ZOHO_PEOPLE_API_DOMAIN
 ZOHO_PEOPLE_REDIRECT_URI
 ZOHO_PEOPLE_ACCOUNTS_URL
+ZOHO_ATTENDANCE_CHECKIN_TIME
 ```
 
 Useful functions:
@@ -192,6 +197,61 @@ testLogZohoPeopleLeaves()
 syncTodayZohoPeopleLeaves()
 syncZohoPeopleLeavesForDate(dateString)
 ```
+
+## Attendance Push to Zoho (MissionHQ -> Zoho)
+
+Phase 1 of the reverse integration: pushes who was present each day into Zoho
+People so attendance is reflected there. This is the opposite direction from the
+leave sync (which reads Zoho). Long-term goal is real hours worked; phase 1 only
+sends a nominal check-in.
+
+Lives in `ZohoAttendance.js` and reuses the Zoho OAuth + domain-fallback helpers
+from `ZohoPeople.js`. Requires the `ZOHOPEOPLE.attendance.ALL` scope.
+
+API used (one request for the whole org):
+
+```text
+POST /people/api/attendance/bulkImport?data=<JSONArray>
+dateFormat=yyyy-MM-dd HH:mm:ss
+```
+
+Each present employee becomes a check-in object, identified by `emailId` (or
+`empId` if a Zoho emp-id column exists in the log sheet):
+
+```json
+[{"emailId":"a@hyperverge.co","checkIn":"2026-06-24 09:30:00","location":"Office"}]
+```
+
+- Bulk Import rate limit: 10 requests / 5-min lock. One call per day stays well
+  under it. (The single check-in/check-out API is avoided because its 5-min lock
+  is per-request and would not scale across the org.)
+- Phase 1 sends **check-in only** (no check-out / hours). Check-in time is a
+  nominal placeholder; override with the `ZOHO_ATTENDANCE_CHECKIN_TIME` property
+  (`HH:mm:ss`, default `09:30:00`).
+
+### Who gets pushed
+
+Every real status is pushed. Only blank cells (no response) and `Pending` are
+skipped (`ZOHO_ATTENDANCE_NON_PUSH_STATUSES`).
+
+### Location label
+
+Zoho's `location` means a geographic punch **site** (e.g. Bengaluru, Mumbai),
+not a work mode like Home/Office. It is read from the MissionHQ Log's own
+`Location` column (per-employee site). If that column is absent/blank, `location`
+is omitted (it is optional in Zoho).
+
+### Functions
+
+```text
+syncTodayAttendanceToZoho()
+syncAttendanceToZohoForDate(dateString)
+testLogZohoAttendancePayload()   // dry run: logs payload, calls nothing
+```
+
+Run manually from the **MissionHQ** spreadsheet menu first
+(`Preview Attendance Push` then `Push Attendance to Zoho`); attach to a daily
+end-of-day trigger once validated. Not wired into the prompt/reminder flow.
 
 ## Apps Script Deployment
 
@@ -243,6 +303,7 @@ analytics
 summary
 zohoPeopleAuthUrl
 syncZohoPeopleLeaves
+syncZohoAttendance
 ```
 
 ## Validation

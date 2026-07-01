@@ -38,8 +38,38 @@ const ZOHO_PEOPLE_LEAVE_RECORD_PATHS = [
   "/api/v2/leavetracker/leaves/records"
 ];
 
+// Attendance push (MissionHQ -> Zoho). Bulk Import API is used so the whole
+// org is sent in a single request (rate limit: 10 req / 5-min lock).
+const ZOHO_PEOPLE_ATTENDANCE_BULK_PATHS = [
+  "/people/api/attendance/bulkImport"
+];
+
+// Zoho Bulk Import expects this date-time format (note: different from the
+// leave API's yyyy-MM-dd). checkIn/checkOut timestamps must match it.
+const ZOHO_ATTENDANCE_DATETIME_FORMAT = "yyyy-MM-dd HH:mm:ss";
+
+// Phase 1 sends a nominal check-in time only (no check-out / real hours yet).
+// Override via the ZOHO_ATTENDANCE_CHECKIN_TIME script property ("HH:mm:ss").
+const ZOHO_ATTENDANCE_DEFAULT_CHECKIN_TIME = "09:30:00";
+
+// Optional log-sheet column holding each person's Zoho employee id. When
+// present we send empId; otherwise we fall back to emailId (both are accepted
+// by Zoho as the employee mapper). Header is matched case-insensitively.
+const ZOHO_ATTENDANCE_EMPID_COLUMNS = ["Zoho EmpID", "Zoho Emp ID", "Employee ID", "EmpID"];
+
+// MissionHQ Log column holding each employee's geographic site (e.g. Bengaluru).
+// Zoho's "location" means a punch site, not a work mode, so this column feeds it
+// directly. Matched case-insensitively; if absent, location is omitted.
+const ZOHO_ATTENDANCE_SITE_COLUMNS = ["Location", "Site", "City"];
+
+// Date-cell values that are not real attendance and are never pushed.
+const ZOHO_ATTENDANCE_NON_PUSH_STATUSES = ["pending"];
+
 const ZOHO_PEOPLE_SCOPES = [
+  // Leave sync (existing): read approved leave records
   "ZOHOPEOPLE.leave.READ",
   "ZOHOPEOPLE.forms.READ",
-  "ZOHOPEOPLE.employee.ALL"
+  "ZOHOPEOPLE.employee.ALL",
+  // Attendance push (new): check-in/check-out API write + read back
+  "ZOHOPEOPLE.attendance.ALL"
 ];
