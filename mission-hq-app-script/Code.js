@@ -159,44 +159,28 @@ function doPost(e) {
       throw new Error("No postData or contents in the request");
     }
 
-    const rawPayload = e.postData.contents.split('=')[1];
-    const decodedPayload = decodeURIComponent(rawPayload);
-    const payload = JSON.parse(decodedPayload);
-    logToDumpSheet("Parsed payload: " + JSON.stringify(payload));
+    const data = JSON.parse(e.postData.contents);
+    const email = (data.email || "").toString().trim();
+    const date = (data.date || "").toString().trim();
+    const status = (data.status || "").toString().trim();
+    logToDumpSheet(`Sheet write request: email=${email}, date=${date}, status=${status}`);
 
-    if (payload.type === 'block_actions') {
-      const userInfo = getUserData(payload.user.id)
-      const userName = userInfo?.name;
-      const userEmail = userInfo?.email;
-      const firstAction = payload.actions && payload.actions[0];
-      const actionValue = firstAction ? firstAction.value : undefined;
-      const actionType = firstAction ? firstAction.type : undefined;
-      const messageTimestamp = payload.message.ts;
-      const channelId = payload.channel.id;
-      const userId = payload.user.id
-
-      logToDumpSheet(`Processing interaction for user: ${userName}, email: ${userEmail}, channel: ${channelId}, action: ${actionValue || actionType}`);
-
-      if (actionType === "static_select") {
-        return ContentService.createTextOutput('');
-      }
-
-      if (actionValue && actionValue.startsWith("submit_location_")) {
-        handleLocationsPayload(payload, actionValue, userEmail, channelId, messageTimestamp, userId);
-      } else {
-        logToDumpSheet(`Unsupported action: ${actionValue || actionType}`);
-        return ContentService.createTextOutput('Unsupported action');
-      }
-
-      logToDumpSheet(`Interaction processed successfully for user: ${userName}`);
-      return ContentService.createTextOutput('Interaction processed successfully');
-    } else {
-      return ContentService.createTextOutput('Unsupported payload type');
+    if (!email || !date || !status) {
+      return jsonOutput_({ success: false, message: "Missing email, date, or status" });
     }
+
+    const result = updateLocationByEmailID(email, status, date);
+    logToDumpSheet(`Sheet write result for ${email}: ${JSON.stringify(result)}`);
+    return jsonOutput_(result);
   } catch (error) {
     logToDumpSheet('Error in doPost: ' + error.toString());
-    return ContentService.createTextOutput('Error occurred: ' + error.toString());
+    return jsonOutput_({ success: false, error: error.toString() });
   }
+}
+
+function jsonOutput_(obj) {
+  return ContentService.createTextOutput(JSON.stringify(obj))
+    .setMimeType(ContentService.MimeType.JSON);
 }
 
 // Logs a message to the "DUMP" sheet of the active spreadsheet for debugging or data tracking purposes.

@@ -8,6 +8,7 @@ type SlackPayload = {
     selected_option?: SelectedOption;
   }>;
   channel?: { id?: string };
+  user?: { id?: string };
   message?: {
     ts?: string;
     text?: string;
@@ -126,9 +127,11 @@ async function updateSlackMessage(payload: SlackPayload, date: string, option: S
   if (!channel || !ts) return;
 
   const label = optionLabel(option);
-  const statusLine = label ? `\n*You selected:* ${label}` : "";
+  const responseLine = label
+    ? `Thank you for your update! We received your response *${label}* for ${date}.`
+    : `Thank you for your update! We received your response for ${date}.`;
   const funFact = extractFunFact(payload);
-  const text = `Thank you for your update! We received your response for ${date}.${statusLine}${funFact ? `\n\n${funFact}` : ""}`;
+  const text = `${responseLine}${funFact ? `\n\n${funFact}` : ""}`;
 
   const response = await fetch("https://slack.com/api/chat.update", {
     method: "POST",
@@ -155,18 +158,88 @@ async function updateSlackMessage(payload: SlackPayload, date: string, option: S
   }
 }
 
-async function forwardToAppsScript(rawBody: string) {
+// Maps a selected location value to the Slack profile status to set.
+const STATUS_CONFIG: Record<string, { text: string; emoji: string }> = {
+  "Home": { text: "WFH", emoji: ":working-from-home:" },
+  "Compensatory-WFH": { text: "WFH", emoji: ":working-from-home:" },
+  "Leave": { text: "On Leave", emoji: ":palm_tree:" },
+  "Client-Location": { text: "Client Location", emoji: ":round_pushpin:" },
+  "Travel": { text: "Travel", emoji: ":luggage:" },
+};
+
+// yyyy-MM-dd in Asia/Kolkata.
+function istDateString(d: Date) {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Kolkata",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(d);
+}
+
+/**
+ * Sets the submitting user's Slack profile status instantly. Skips if the user
+ * already has any status set (so we never overwrite a manual status — this is
+ * what replaces the old Coimbatore special-case). Only runs for today's prompt.
+ */
+async function updateSlackProfileStatus(payload: SlackPayload, option: SelectedOption, date: string) {
+  const userId = payload.user?.id;
+  const value = option.value || "";
+  const cfg = STATUS_CONFIG[value];
+  if (!userId || !cfg) return;
+
+  const istToday = istDateString(new Date());
+  if (date !== istToday) return; // only set for today's prompt, not backfilled dates
+
+  const userToken = getRequiredEnv("MISSION_HQ_SLACK_USER_TOKEN");
+
+  // Do not overwrite an existing status.
+  const getResp = await fetch(`https://slack.com/api/users.profile.get?user=${encodeURIComponent(userId)}`, {
+    headers: { authorization: `Bearer ${userToken}` },
+  });
+  const getJson = await getResp.json();
+  const current = getJson.profile || {};
+  const hasStatus = (current.status_text && current.status_text.trim() !== "") ||
+    (current.status_emoji && current.status_emoji.trim() !== "");
+  if (hasStatus) return;
+
+  // Expire at end of the IST day (23:59:59 IST = 18:29:59 UTC same date).
+  const [y, m, d] = istToday.split("-").map(Number);
+  const expiration = Math.floor(Date.UTC(y, m - 1, d, 18, 29, 59) / 1000);
+
+  const setResp = await fetch("https://slack.com/api/users.profile.set", {
+    method: "POST",
+    headers: { authorization: `Bearer ${userToken}`, "content-type": "application/json" },
+    body: JSON.stringify({
+      user: userId,
+      profile: { status_text: cfg.text, status_emoji: cfg.emoji, status_expiration: expiration },
+    }),
+  });
+  const setJson = await setResp.json();
+  if (!setJson.ok) throw new Error(`Slack profile.set failed: ${setJson.error || "unknown_error"}`);
+}
+
+// Resolves a Slack user id to their email via users.info (bot token).
+async function resolveUserEmail(userId: string) {
+  const resp = await fetch(`https://slack.com/api/users.info?user=${encodeURIComponent(userId)}`, {
+    headers: { authorization: `Bearer ${getRequiredEnv("MISSION_HQ_SLACK_BOT_TOKEN")}` },
+  });
+  const json = await resp.json();
+  return json.ok ? (json.user?.profile?.email || "") : "";
+}
+
+// Forwards a clean, pre-processed record to Apps Script, which only writes the
+// Google Sheet: { email, date, status }.
+async function forwardToAppsScript(record: { email: string; date: string; status: string }) {
   const appsScriptUrl = getRequiredEnv("MISSION_HQ_APPS_SCRIPT_URL");
-  const headers: Record<string, string> = {
-    "content-type": "application/x-www-form-urlencoded",
-  };
+  const headers: Record<string, string> = { "content-type": "application/json" };
   const sharedSecret = Deno.env.get("MISSION_HQ_APPS_SCRIPT_SHARED_SECRET");
   if (sharedSecret) headers["x-mission-hq-secret"] = sharedSecret;
 
   const response = await fetch(appsScriptUrl, {
     method: "POST",
     headers,
-    body: rawBody,
+    body: JSON.stringify(record),
   });
 
   if (!response.ok) {
@@ -174,21 +247,42 @@ async function forwardToAppsScript(rawBody: string) {
   }
 }
 
-async function processSlackInteraction(payload: SlackPayload, rawBody: string) {
+async function processSlackInteraction(payload: SlackPayload) {
   const firstAction = payload.actions?.[0];
   const actionType = firstAction?.type || "";
   const actionValue = firstAction?.value || "";
 
   if (actionType === "static_select") return;
+  if (!actionValue.startsWith("submit_location_")) return;
 
-  if (actionValue.startsWith("submit_location_")) {
-    const option = selectedOption(payload);
-    if (option?.value) {
-      await updateSlackMessage(payload, parseSubmitDate(actionValue), option);
-    }
+  const option = selectedOption(payload);
+  if (!option?.value) return;
+
+  const date = parseSubmitDate(actionValue);
+  const isToday = date === istDateString(new Date());
+
+  // 1) Update the Slack confirmation message only for today's prompt. If the
+  //    user answers an older prompt (backfill), we leave that message as-is.
+  if (isToday) {
+    await updateSlackMessage(payload, date, option);
   }
 
-  await forwardToAppsScript(rawBody);
+  // 2) Set the Slack profile status (also today-only, checked inside; isolated
+  //    so it never blocks the sheet write).
+  try {
+    await updateSlackProfileStatus(payload, option, date);
+  } catch (statusError) {
+    console.error("MissionHQ profile status update failed", statusError);
+  }
+
+  // 3) Resolve email and hand Apps Script a clean record to write to the sheet.
+  const userId = payload.user?.id;
+  const email = userId ? await resolveUserEmail(userId) : "";
+  if (!email) {
+    console.error("MissionHQ: could not resolve email for user", userId);
+    return;
+  }
+  await forwardToAppsScript({ email, date, status: option.value });
 }
 
 Deno.serve(async (req) => {
@@ -201,7 +295,7 @@ Deno.serve(async (req) => {
     const payload = parseSlackPayload(rawBody);
     if (!payload || payload.type !== "block_actions") return textResponse("");
 
-    const backgroundTask = processSlackInteraction(payload, rawBody).catch((error) => {
+    const backgroundTask = processSlackInteraction(payload).catch((error) => {
       console.error("MissionHQ background task failed", error);
     });
 
