@@ -5,7 +5,7 @@ type SlackPayload = {
   actions?: Array<{
     type?: string;
     value?: string;
-    selected_option?: { value?: string };
+    selected_option?: SelectedOption;
   }>;
   channel?: { id?: string };
   message?: {
@@ -14,9 +14,11 @@ type SlackPayload = {
     blocks?: Array<Record<string, unknown>>;
   };
   state?: {
-    values?: Record<string, Record<string, { selected_option?: { value?: string } }>>;
+    values?: Record<string, Record<string, { selected_option?: SelectedOption }>>;
   };
 };
+
+type SelectedOption = { value?: string; text?: { text?: string } };
 
 function textResponse(body = "", status = 200) {
   return new Response(body, {
@@ -85,19 +87,24 @@ function parseSubmitDate(actionValue: string) {
   return match ? match[1] : raw;
 }
 
-function selectedLocation(payload: SlackPayload) {
-  const direct = payload.actions?.[0]?.selected_option?.value;
-  if (direct) return direct;
+function selectedOption(payload: SlackPayload): SelectedOption | undefined {
+  const direct = payload.actions?.[0]?.selected_option;
+  if (direct?.value) return direct;
 
   const stateValues = payload.state?.values || {};
   for (const block of Object.values(stateValues)) {
     for (const action of Object.values(block)) {
-      const value = action.selected_option?.value;
-      if (value) return value;
+      if (action.selected_option?.value) return action.selected_option;
     }
   }
 
-  return "";
+  return undefined;
+}
+
+// Human-readable label Slack shows for the picked option (with emoji),
+// falling back to the raw value.
+function optionLabel(option: SelectedOption) {
+  return option.text?.text || option.value || "";
 }
 
 function extractFunFact(payload: SlackPayload) {
@@ -113,13 +120,15 @@ function extractFunFact(payload: SlackPayload) {
   return `*Fun Fact:* ${match[1].trim()}`;
 }
 
-async function updateSlackMessage(payload: SlackPayload, date: string) {
+async function updateSlackMessage(payload: SlackPayload, date: string, option: SelectedOption) {
   const channel = payload.channel?.id;
   const ts = payload.message?.ts;
   if (!channel || !ts) return;
 
+  const label = optionLabel(option);
+  const statusLine = label ? `\n*You selected:* ${label}` : "";
   const funFact = extractFunFact(payload);
-  const text = `Thank you for your update! We received your response for ${date}.${funFact ? `\n\n${funFact}` : ""}`;
+  const text = `Thank you for your update! We received your response for ${date}.${statusLine}${funFact ? `\n\n${funFact}` : ""}`;
 
   const response = await fetch("https://slack.com/api/chat.update", {
     method: "POST",
@@ -173,9 +182,9 @@ async function processSlackInteraction(payload: SlackPayload, rawBody: string) {
   if (actionType === "static_select") return;
 
   if (actionValue.startsWith("submit_location_")) {
-    const location = selectedLocation(payload);
-    if (location) {
-      await updateSlackMessage(payload, parseSubmitDate(actionValue));
+    const option = selectedOption(payload);
+    if (option?.value) {
+      await updateSlackMessage(payload, parseSubmitDate(actionValue), option);
     }
   }
 

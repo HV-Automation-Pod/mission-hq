@@ -177,6 +177,10 @@ function updateSlackProfileStatus(userId, location = "Home", date = "2025-06-24"
       status_text: 'WFH',
       status_emoji: ':working-from-home:'
     },
+    'Compensatory WFH': {
+      status_text: 'WFH',
+      status_emoji: ':working-from-home:'
+    },
     'Leave': {
       status_text: 'On Leave',
       status_emoji: ':palm_tree:'
@@ -203,7 +207,7 @@ function updateSlackProfileStatus(userId, location = "Home", date = "2025-06-24"
   }
 
   // Only process Home, Leave, or Client-Location
-  if (!['Home', 'Leave', 'Client-Location', 'Travel'].includes(location)) {
+  if (!['Home', 'Compensatory WFH', 'Leave', 'Client-Location', 'Travel'].includes(location)) {
     Logger.log(`No status update required for location "${location}" for user ${userId}`);
     return {
       success: true,
@@ -280,7 +284,9 @@ function handleLocationsPayload(payload, actionValue, userEmail, channelId, mess
       factIndex = submitMeta.factIndex;
     }
 
-    let location = firstAction && firstAction.selected_option ? firstAction.selected_option.value : null;
+    const directOption = firstAction && firstAction.selected_option;
+    let location = directOption ? directOption.value : null;
+    let locationLabel = directOption && directOption.text ? directOption.text.text : "";
     const stateValues = payload.state && payload.state.values ? payload.state.values : {};
     const blockKeys = Object.keys(stateValues);
 
@@ -292,6 +298,7 @@ function handleLocationsPayload(payload, actionValue, userEmail, channelId, mess
           const selectedOption = actions[actionKey]?.selected_option;
           if (selectedOption && selectedOption.value) {
             location = selectedOption.value;
+            locationLabel = selectedOption.text ? selectedOption.text.text : "";
             break;
           }
         }
@@ -309,15 +316,20 @@ function handleLocationsPayload(payload, actionValue, userEmail, channelId, mess
 
     const funFactText = extractFunFactFromSlackMessage_(payload.message) || getFunFactTextByIndex_(factIndex);
 
-    // Create confirmation message with Fun Fact
-    const confirmationMessage = `Thank you for your update! We received your response for ${date}.${funFactText ? `\n\n${funFactText}` : ""}`;
+    // Show the selected option back so mis-clicks are easy to spot.
+    const statusLabel = locationLabel || formatLocationValueForSheet_(location);
+    const statusLine = statusLabel ? `\n*You selected:* ${statusLabel}` : "";
+
+    // Create confirmation message with selected status + Fun Fact
+    const confirmationMessage = `Thank you for your update! We received your response for ${date}.${statusLine}${funFactText ? `\n\n${funFactText}` : ""}`;
 
     // Update the original message
     updateSlackMessage(channelId, messageTimestamp, confirmationMessage);
 
     // Coimbatore-based employees should not get the WFH status set.
+    const wfhLocations = ["Home", "Compensatory WFH"];
     const baseLocation = getEmployeeBaseLocationByEmail_(userEmail);
-    const skipWfhStatus = location === "Home" && baseLocation.toLowerCase() === "coimbatore";
+    const skipWfhStatus = wfhLocations.includes(location) && baseLocation.toLowerCase() === "coimbatore";
     if (!skipWfhStatus) {
       updateSlackProfileStatus(userId, location, date);
     }
