@@ -176,6 +176,40 @@ starts with "Thank you for your update", else `chat.update`. Needs bot scopes
 `im:history` + `im:write`, and honor Slack `Retry-After` on 429s (batch history
 once per channel, not per message).
 
+## Daily Prompt Content: Messages & Trivia (with low-trivia alert)
+
+The daily prompt DM (built in `SlackMessage.js` `collectEmployeeLocationMessage`)
+is assembled from two rotating arrays in `Code.js`:
+
+- `MESSAGES` — the greeting line (`{name}` is substituted). ~35 entries.
+- `TRIVIA` — the "Fun Fact:" line. ~172 entries. Reviewed July 2026 for a 350+
+  person, India/Vietnam-heavy org: US-only pop-culture and celebrity trivia and a
+  few debunked "facts" were cut, and the list was reweighted toward India,
+  Vietnam/Asia and universal science/nature. Each fact was verified against a
+  reputable primary source (NASA, UNESCO, Guinness, Nature, PLoS, Britannica,
+  NIST, etc.). Keep facts work-appropriate and globally neutral — the prompt DMs
+  the whole org across Bengaluru, Mumbai and Vietnam.
+
+Rotation is driven by two Script Properties, `currentStep` (into `MESSAGES`) and
+`currentFact` (into `TRIVIA`), each advanced by 1 in `ProcessData.js` after a
+successful daily send (`if (sentCount > 0)`), wrapping with `% length`. They only
+advance on real send days, so weekends/holidays don't burn entries.
+
+**Low-trivia alert:** in `processEmailsAndSendSlackMessage()`, when the fact
+shown that day is one of the **last 3** (`currentFact >= TRIVIA.length - 3`), the
+bot DMs `ALERT_USER_ID` (via `sendSlackConfirmationMessage`) that trivia is
+almost out, with the count remaining. It fires on each of the final 3 days
+(2 → 1 → 0 left) for buffer time, and is best-effort (try/catch, never blocks the
+prompt). To refresh:
+
+1. Replace/extend the `TRIVIA` array in `Code.js`.
+2. If you replaced the list, reset the `currentFact` Script Property to `0` so
+   the new facts play from the top (otherwise the old index points partway in).
+
+Keep facts work-appropriate — the prompt DMs the whole org. This mirrors the
+referral bot's motivational-sentence refill alert (`Slack.js` →
+`REFERRAL_ALERT_USER_ID`) in the `hypertalent-platform/ta-scripts/referral` repo.
+
 ## Location Dropdown
 
 The Google Sheet `Locations` tab should include:

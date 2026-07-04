@@ -123,6 +123,23 @@ function processEmailsAndSendSlackMessage() {
     }
 
     if (sentCount > 0) {
+      // Warn the admin when the trivia list is almost exhausted. `currentFact`
+      // here is the index shown today (before the increment below), so this
+      // fires on each of the last 3 facts (indices length-3, length-2,
+      // length-1), giving buffer time to add fresh facts before it wraps.
+      if (currentFact >= TRIVIA.length - 3) {
+        try {
+          const factsLeftAfterToday = TRIVIA.length - 1 - currentFact;
+          sendSlackConfirmationMessage(
+            ALERT_USER_ID,
+            `⚠️ MissionHQ trivia is almost out: ${factsLeftAfterToday} fun fact(s) left after today before the list repeats. Add fresh facts to the TRIVIA array in Code.js (then reset the currentFact Script Property to 0). 🔁`
+          );
+          Logger.log(`Sent trivia-refill alert (${factsLeftAfterToday} left) to ALERT_USER_ID`);
+        } catch (alertError) {
+          Logger.log(`Failed to send trivia-refill alert: ${alertError.message}`);
+        }
+      }
+
       currentStep = (currentStep + 1) % MESSAGES.length;
       props.setProperty('currentStep', currentStep.toString());
       Logger.log(`Updated currentStep to: ${currentStep}`);
