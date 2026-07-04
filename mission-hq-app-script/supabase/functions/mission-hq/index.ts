@@ -259,13 +259,9 @@ async function processSlackInteraction(payload: SlackPayload) {
   if (!option?.value) return;
 
   const date = parseSubmitDate(actionValue);
-  const isToday = date === istDateString(new Date());
 
-  // 1) Update the Slack confirmation message only for today's prompt. If the
-  //    user answers an older prompt (backfill), we leave that message as-is.
-  if (isToday) {
-    await updateSlackMessage(payload, date, option);
-  }
+  // 1) Update the Slack confirmation message.
+  await updateSlackMessage(payload, date, option);
 
   // 2) Set the Slack profile status (also today-only, checked inside; isolated
   //    so it never blocks the sheet write).
