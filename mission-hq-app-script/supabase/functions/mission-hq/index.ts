@@ -88,6 +88,21 @@ function parseSubmitDate(actionValue: string) {
   return match ? match[1] : raw;
 }
 
+// Identity metadata embedded in newer Submit button values after a "|":
+//   submit_location_<date>_<fact>|e=<email>&d=<dept>&l=<location>
+// Older messages have no "|" segment, so every field comes back empty and the
+// caller falls back to the users.info API for the email.
+function parseSubmitMeta(actionValue: string) {
+  const meta = { email: "", department: "", location: "" };
+  const sep = actionValue.indexOf("|");
+  if (sep === -1) return meta;
+  const params = new URLSearchParams(actionValue.slice(sep + 1));
+  meta.email = (params.get("e") || "").trim();
+  meta.department = (params.get("d") || "").trim();
+  meta.location = (params.get("l") || "").trim();
+  return meta;
+}
+
 function selectedOption(payload: SlackPayload): SelectedOption | undefined {
   const direct = payload.actions?.[0]?.selected_option;
   if (direct?.value) return direct;
@@ -230,7 +245,7 @@ async function resolveUserEmail(userId: string) {
 
 // Forwards a clean, pre-processed record to Apps Script, which only writes the
 // Google Sheet: { email, date, status }.
-async function forwardToAppsScript(record: { email: string; date: string; status: string }) {
+async function forwardToAppsScript(record: { email: string; date: string; status: string; department?: string; location?: string }) {
   const appsScriptUrl = getRequiredEnv("MISSION_HQ_APPS_SCRIPT_URL");
   const headers: Record<string, string> = { "content-type": "application/json" };
   const sharedSecret = Deno.env.get("MISSION_HQ_APPS_SCRIPT_SHARED_SECRET");
@@ -259,6 +274,7 @@ async function processSlackInteraction(payload: SlackPayload) {
   if (!option?.value) return;
 
   const date = parseSubmitDate(actionValue);
+  const meta = parseSubmitMeta(actionValue);
 
   // 1) Update the Slack confirmation message.
   await updateSlackMessage(payload, date, option);
@@ -271,14 +287,26 @@ async function processSlackInteraction(payload: SlackPayload) {
     console.error("MissionHQ profile status update failed", statusError);
   }
 
-  // 3) Resolve email and hand Apps Script a clean record to write to the sheet.
+  // 3) Prefer the email embedded in the button value (new messages); fall back
+  //    to the users.info API for older messages that predate it. Then hand Apps
+  //    Script a clean record to write to the sheet. Department/location are
+  //    forwarded for later use; the sheet-writer ignores them for now.
   const userId = payload.user?.id;
-  const email = userId ? await resolveUserEmail(userId) : "";
+  let email = meta.email;
+  if (!email) {
+    email = userId ? await resolveUserEmail(userId) : "";
+  }
   if (!email) {
     console.error("MissionHQ: could not resolve email for user", userId);
     return;
   }
-  await forwardToAppsScript({ email, date, status: option.value });
+  await forwardToAppsScript({
+    email,
+    date,
+    status: option.value,
+    department: meta.department,
+    location: meta.location,
+  });
 }
 
 Deno.serve(async (req) => {

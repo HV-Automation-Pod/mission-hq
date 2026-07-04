@@ -12,7 +12,7 @@ function testCollectEmployeeLocationMessageToAlertUser() {
   );
 }
 
-function collectEmployeeLocationMessage(userId, name, email, currentStep, currentFact) {
+function collectEmployeeLocationMessage(userId, name, email, currentStep, currentFact, department, location) {
   const url = 'https://slack.com/api/chat.postMessage';
 
   if (currentStep === undefined || currentStep === null || isNaN(currentStep)) {
@@ -50,6 +50,18 @@ function collectEmployeeLocationMessage(userId, name, email, currentStep, curren
 
   const today = new Date();
   const date = Utilities.formatDate(today, 'Asia/Kolkata', 'yyyy-MM-dd');
+
+  // Identity metadata carried inside the Submit button value (invisible to the
+  // user — this does NOT change any visible message block). The edge function
+  // reads the email straight from here and only falls back to the users.info
+  // API for older messages that predate this. Department/location ride along
+  // for later use. URL-encoded so spaces/&/@ in the values stay parseable.
+  const submitMeta = [
+    `e=${encodeURIComponent(email || "")}`,
+    `d=${encodeURIComponent(department || "")}`,
+    `l=${encodeURIComponent(location || "")}`
+  ].join("&");
+
   const actionElements = [
     {
       type: "static_select",
@@ -68,7 +80,7 @@ function collectEmployeeLocationMessage(userId, name, email, currentStep, curren
         emoji: true
       },
       style: "primary",
-      value: `submit_location_${date}_${currentFact}`,
+      value: `submit_location_${date}_${currentFact}|${submitMeta}`,
       action_id: "submit_location"
     }
   ];

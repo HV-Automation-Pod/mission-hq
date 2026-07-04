@@ -2,17 +2,20 @@ const ZOHO_ORG_TREE_URL_PROPERTY = "ZOHO_ORG_TREE_URL";
 const ZOHO_ORG_TREE_TOKEN_PROPERTY = "ZOHO_ORG_TREE_TOKEN";
 
 /**
- * Fetches all active employees from the Zoho org-tree endpoint and appends
- * Full Name / Email Address / Department rows to the "MissionHQ Log" sheet.
+ * Fetches all active employees from the Zoho org-tree endpoint and syncs them
+ * into the "MissionHQ Log" sheet:
+ *   - Appends Full Name / Email Address / Department / Location rows for
+ *     employees whose email is not in the sheet yet.
+ *   - Fills the Location column for existing rows where it is blank (never
+ *     overwrites a location already set in the sheet).
  *
- * Idempotent: rows whose email already exists in the sheet are skipped, so it is
- * safe to run repeatedly without creating duplicates.
+ * Idempotent: safe to run repeatedly without creating duplicates.
  */
 function syncEmployeesFromZohoOrgTree() {
   const employees = fetchZohoOrgTreeEmployees_();
   if (!employees.length) {
     Logger.log("No employees returned from org-tree endpoint.");
-    return { added: 0, skipped: 0 };
+    return { added: 0, skipped: 0, locationsFilled: 0 };
   }
 
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CANDIDATE_SHEET_NAME);
@@ -24,36 +27,55 @@ function syncEmployeesFromZohoOrgTree() {
   const nameColIndex = headers.indexOf("Full Name");
   const emailColIndex = headers.indexOf("Email Address");
   const deptColIndex = headers.indexOf("Department");
-  if (nameColIndex === -1 || emailColIndex === -1 || deptColIndex === -1) {
+  const locColIndex = headers.indexOf("Location");
+  if (nameColIndex === -1 || emailColIndex === -1 || deptColIndex === -1 || locColIndex === -1) {
     throw new Error(
-      'Required columns "Full Name", "Email Address" or "Department" not found in header row'
+      'Required columns "Full Name", "Email Address", "Department" or "Location" not found in header row'
     );
   }
 
-  // Build a set of emails already present in the sheet (case-insensitive).
-  const existingEmails = new Set();
+  // Map of email -> 0-based data row index for rows already in the sheet.
+  const existingRowByEmail = {};
   const lastRow = sheet.getLastRow();
+  let emailValues = [];
+  let locationValues = [];
   if (lastRow > 1) {
-    const emailValues = sheet.getRange(2, emailColIndex + 1, lastRow - 1, 1).getValues();
-    emailValues.forEach(row => {
+    emailValues = sheet.getRange(2, emailColIndex + 1, lastRow - 1, 1).getValues();
+    locationValues = sheet.getRange(2, locColIndex + 1, lastRow - 1, 1).getValues();
+    emailValues.forEach((row, i) => {
       const email = row[0]?.toString().trim().toLowerCase();
-      if (email) existingEmails.add(email);
+      if (email && !(email in existingRowByEmail)) existingRowByEmail[email] = i;
     });
   }
 
-  // Width of the row block we write (up to the right-most of the 3 target columns).
-  const rowWidth = Math.max(nameColIndex, emailColIndex, deptColIndex) + 1;
+  // Width of the row block we write (up to the right-most of the target columns).
+  const rowWidth = Math.max(nameColIndex, emailColIndex, deptColIndex, locColIndex) + 1;
 
   const newRows = [];
   let skipped = 0;
+  let locationsFilled = 0;
   employees.forEach(emp => {
     const email = (emp.email || "").toString().trim();
     const emailKey = email.toLowerCase();
-    if (!emailKey || existingEmails.has(emailKey)) {
+    if (!emailKey) {
       skipped++;
       return;
     }
-    existingEmails.add(emailKey); // guard against duplicates within the payload itself
+    const zohoLocation = (emp.location || "").toString().trim();
+
+    if (emailKey in existingRowByEmail) {
+      // Existing row: only fill Location when the sheet cell is blank.
+      const rowIndex = existingRowByEmail[emailKey];
+      const currentLocation = locationValues[rowIndex][0]?.toString().trim() || "";
+      if (!currentLocation && zohoLocation) {
+        locationValues[rowIndex][0] = zohoLocation;
+        locationsFilled++;
+      } else {
+        skipped++;
+      }
+      return;
+    }
+    existingRowByEmail[emailKey] = -1; // guard against duplicates within the payload itself
 
     const fullName = [emp.first_name, emp.last_name]
       .map(part => (part || "").toString().trim())
@@ -65,15 +87,21 @@ function syncEmployeesFromZohoOrgTree() {
     row[nameColIndex] = fullName;
     row[emailColIndex] = email;
     row[deptColIndex] = department;
+    row[locColIndex] = zohoLocation;
     newRows.push(row);
   });
+
+  // Write the Location column back in one shot (only blank cells were changed).
+  if (locationsFilled > 0) {
+    sheet.getRange(2, locColIndex + 1, locationValues.length, 1).setValues(locationValues);
+  }
 
   if (newRows.length > 0) {
     sheet.getRange(lastRow + 1, 1, newRows.length, rowWidth).setValues(newRows);
   }
 
-  Logger.log(`Employee sync complete. Added ${newRows.length}, skipped ${skipped} (already present).`);
-  return { added: newRows.length, skipped: skipped };
+  Logger.log(`Employee sync complete. Added ${newRows.length}, filled ${locationsFilled} blank location(s), skipped ${skipped} (already present).`);
+  return { added: newRows.length, skipped: skipped, locationsFilled: locationsFilled };
 }
 
 /**

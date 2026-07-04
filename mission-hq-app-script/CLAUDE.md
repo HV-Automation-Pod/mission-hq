@@ -114,17 +114,67 @@ SlackData.js       Slack user/channel data sync
 - Pending Zoho People leaves are logged in the test function but are not applied to attendance.
 - All users now submit through the `submit_location_...` button path.
 - Static dropdown changes intentionally return an empty response and wait for the user to click Submit.
-- Submit button value includes the current trivia/fact index:
+- Submit button value carries the date, the trivia/fact index, and (newer
+  messages only) URL-encoded identity metadata after a `|`:
 
 ```text
-submit_location_${date}_${currentFact}
+submit_location_${date}_${currentFact}|e=${email}&d=${department}&l=${location}
 ```
+
+  Built in `SlackMessage.js` `collectEmployeeLocationMessage(...)`, which now takes
+  `department` and `location` (read from the MissionHQ Log row in
+  `ProcessData.js`). This is invisible metadata inside the button `value` only —
+  it does not change any visible message block, so old already-sent messages
+  still render and work.
 
 - `Office-Client` from Slack is written to the sheet as:
 
 ```text
 Office + Client
 ```
+
+## Submit Flow Ownership (edge function vs Apps Script)
+
+The interactive submit path is split so each responsibility has exactly one owner
+(the July 2 2026 refactor, commit `446b71e`). No duplication between the two.
+
+- Edge function (`index.ts`) owns, on Submit:
+  - Slack signature verification + payload parsing.
+  - `updateSlackMessage` — the `chat.update` confirmation ("Thank you for your
+    update! We received your response *<label>* for <date>.", preserving the
+    Fun Fact).
+  - `updateSlackProfileStatus` — sets the Slack profile status (WFH / On Leave /
+    etc. via `STATUS_CONFIG`). **Today-only**: it returns early when the prompt's
+    date is not today's IST date, and it never overwrites an existing status.
+  - Email resolution: prefers the email embedded in the button value
+    (`parseSubmitMeta`); falls back to the `users.info` API (`resolveUserEmail`)
+    for older messages that predate the embedded metadata.
+  - Forwards a clean record to Apps Script:
+    `{ email, date, status, department, location }`.
+- Apps Script `doPost` (`Code.js`) is a thin sheet-writer: takes
+  `{ email, date, status }` and writes one cell via `updateLocationByEmailID`.
+  `department` / `location` are forwarded for later use but currently ignored by
+  `doPost`.
+
+### `isToday` message-update bug (fixed)
+
+The July 2 refactor originally wrapped `updateSlackMessage` in an
+`if (isToday)` guard, so answering a prompt on any day other than the prompt's
+own date recorded the sheet but left the DM showing the Submit button. That
+guard was removed: the confirmation text names the prompt's own date, so
+updating older/backfilled prompts is safe. The **profile-status** today-only
+check was intentionally kept (see above).
+
+### One-time confirmation backfill (done, script removed)
+
+A one-off `BackfillConfirmations.js` walked the "Messages TS" sheet, and for each
+answered-but-still-showing-Submit DM (July 1 onward) updated it to the
+confirmation. It has served its purpose and was deleted. If needed again: read
+`Messages TS` (Email ID / Message Ts / Date), cross-check the response in
+MissionHQ Log, fetch the DM via `conversations.history`, skip if it already
+starts with "Thank you for your update", else `chat.update`. Needs bot scopes
+`im:history` + `im:write`, and honor Slack `Retry-After` on 429s (batch history
+once per channel, not per message).
 
 ## Location Dropdown
 
@@ -197,6 +247,23 @@ testLogZohoPeopleLeaves()
 syncTodayZohoPeopleLeaves()
 syncZohoPeopleLeavesForDate(dateString)
 ```
+
+## Employee Sync from Zoho Org Tree (`SyncEmployees.js`)
+
+`syncEmployeesFromZohoOrgTree()` (menu: **Sync Employees from Zoho**) GETs the
+org-tree endpoint and syncs employees into the MissionHQ Log sheet. Idempotent.
+
+- Reads the endpoint URL from the `ZOHO_ORG_TREE_URL` Apps Script Property, with
+  optional `ZOHO_ORG_TREE_TOKEN` sent as both `Authorization: Bearer` and
+  `apikey` headers. Expects JSON `{ total_active, employees: [...] }` where each
+  employee has `email`, `first_name`, `last_name`, `department`, `location`, etc.
+- New employees (email not in the sheet) → appends a row with Full Name / Email
+  Address / Department / **Location**.
+- Existing employees → fills the **Location** cell only when it is currently
+  blank (never overwrites a value already in the sheet). Batched single write.
+- All columns are found by header name (`indexOf`), never by position.
+- The `Location` filled here is the geographic site (Bengaluru, etc.) — the same
+  column the Zoho attendance push reads for its punch site.
 
 ## Attendance Push to Zoho (MissionHQ -> Zoho)
 

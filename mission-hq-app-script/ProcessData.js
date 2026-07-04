@@ -75,6 +75,10 @@ function processEmailsAndSendSlackMessage() {
       logToDumpSheet(`Zoho People leave sync failed before Slack prompts: ${leaveSyncError.message}`);
     }
 
+    // Optional columns whose values ride along inside the Submit button value.
+    const deptColIndex = headers.indexOf("Department");
+    const locColIndex = headers.indexOf("Location");
+
     let currentStep = parseInt(props.getProperty('currentStep') || '0', 10);
     let currentFact = parseInt(props.getProperty('currentFact') || '0', 10);
     let sentCount = 0;
@@ -97,10 +101,12 @@ function processEmailsAndSendSlackMessage() {
           failedCount++;
           continue;
         }
+        const department = deptColIndex !== -1 ? (row[deptColIndex]?.toString().trim() || "") : "";
+        const location = locColIndex !== -1 ? (row[locColIndex]?.toString().trim() || "") : "";
         try {
           const userInfo = getUserInfoByEmail(email);
           if (!userInfo || !userInfo.id) throw new Error(`No user found for email ${email}`);
-          const result = collectEmployeeLocationMessage(userInfo.id, name, email, currentStep, currentFact);
+          const result = collectEmployeeLocationMessage(userInfo.id, name, email, currentStep, currentFact, department, location);
           if (result.success) {
             sheet.getRange(i + 1, dateColIndex + 1).setValue("Pending");
             SpreadsheetApp.flush();
