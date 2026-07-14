@@ -133,6 +133,26 @@ submit_location_${date}_${currentFact}|e=${email}&d=${department}&l=${location}
 Office + Client
 ```
 
+## Slack User ID Cache (per-run efficiency)
+
+The daily prompt and reminder flows used to call Slack `users.lookupByEmail`
+once **per employee, every run** (and `collectEmployeeLocationMessage` re-read
+the whole `Locations` sheet once per employee). Both are now hoisted/cached:
+
+- `getLocationsList()` is called **once per run** in `ProcessData.js` and the
+  result is passed into `collectEmployeeLocationMessage(..., locations)`. The
+  function still falls back to `getLocationsList()` when no list is supplied
+  (e.g. the `testCollectEmployeeLocationMessageToAlertUser` helper).
+- A `Slack User ID` column (constant `SLACK_USER_ID_COLUMN`) in the MissionHQ
+  Log caches each employee's resolved `U…` id. `getOrCreateColumnIndex_()`
+  auto-creates it at the end of the sheet on first run (looked up by header
+  name, never by position). Per row: if the id cell is filled it is used
+  directly (no API call); if blank, `getUserInfoByEmail` resolves it once and
+  the id is written back. After one backfill run, lookups drop to only
+  newly-added employees.
+- Store the **user id** (`U…`), not the DM channel id — `chat.postMessage`
+  accepts a user id as `channel` and opens/reuses the DM itself.
+
 ## Submit Flow Ownership (edge function vs Apps Script)
 
 The interactive submit path is split so each responsibility has exactly one owner
@@ -292,7 +312,10 @@ org-tree endpoint and syncs employees into the MissionHQ Log sheet. Idempotent.
   `apikey` headers. Expects JSON `{ total_active, employees: [...] }` where each
   employee has `email`, `first_name`, `last_name`, `department`, `location`, etc.
 - New employees (email not in the sheet) → appends a row with Full Name / Email
-  Address / Department / **Location**.
+  Address / **Slack User ID** / Department / **Location**. The Slack User ID is
+  resolved once from the email via `getUserInfoByEmail` at sync time (best-effort
+  — blank if the hire isn't in Slack yet; the daily flow fills it later). See
+  [Slack User ID Cache](#slack-user-id-cache-per-run-efficiency).
 - Existing employees → fills the **Location** cell only when it is currently
   blank (never overwrites a value already in the sheet). Batched single write.
 - All columns are found by header name (`indexOf`), never by position.

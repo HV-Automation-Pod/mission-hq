@@ -4,8 +4,10 @@ const ZOHO_ORG_TREE_TOKEN_PROPERTY = "ZOHO_ORG_TREE_TOKEN";
 /**
  * Fetches all active employees from the Zoho org-tree endpoint and syncs them
  * into the "MissionHQ Log" sheet:
- *   - Appends Full Name / Email Address / Department / Location rows for
- *     employees whose email is not in the sheet yet.
+ *   - Appends Full Name / Email Address / Slack User ID / Department / Location
+ *     rows for employees whose email is not in the sheet yet. The Slack User ID
+ *     is resolved once from the email so the daily prompt/reminder flows never
+ *     have to call users.lookupByEmail for that employee.
  *   - Fills the Location column for existing rows where it is blank (never
  *     overwrites a location already set in the sheet).
  *
@@ -33,6 +35,9 @@ function syncEmployeesFromZohoOrgTree() {
       'Required columns "Full Name", "Email Address", "Department" or "Location" not found in header row'
     );
   }
+  // Slack User ID cache column (auto-created if missing), so new hires are
+  // written with their id already resolved.
+  const slackIdColIndex = getOrCreateColumnIndex_(sheet, SLACK_USER_ID_COLUMN).index;
 
   // Map of email -> 0-based data row index for rows already in the sheet.
   const existingRowByEmail = {};
@@ -49,11 +54,12 @@ function syncEmployeesFromZohoOrgTree() {
   }
 
   // Width of the row block we write (up to the right-most of the target columns).
-  const rowWidth = Math.max(nameColIndex, emailColIndex, deptColIndex, locColIndex) + 1;
+  const rowWidth = Math.max(nameColIndex, emailColIndex, slackIdColIndex, deptColIndex, locColIndex) + 1;
 
   const newRows = [];
   let skipped = 0;
   let locationsFilled = 0;
+  let slackIdsResolved = 0;
   employees.forEach(emp => {
     const email = (emp.email || "").toString().trim();
     const emailKey = email.toLowerCase();
@@ -83,9 +89,19 @@ function syncEmployeesFromZohoOrgTree() {
       .join(" ");
     const department = (emp.department || "").toString().trim();
 
+    // Resolve the Slack id once for the new hire (best-effort: if they are not
+    // in Slack yet, leave it blank and the daily flow will fill it later).
+    let slackId = "";
+    const userInfo = getUserInfoByEmail(email);
+    if (userInfo && userInfo.id) {
+      slackId = userInfo.id;
+      slackIdsResolved++;
+    }
+
     const row = new Array(rowWidth).fill("");
     row[nameColIndex] = fullName;
     row[emailColIndex] = email;
+    row[slackIdColIndex] = slackId;
     row[deptColIndex] = department;
     row[locColIndex] = zohoLocation;
     newRows.push(row);
@@ -100,8 +116,8 @@ function syncEmployeesFromZohoOrgTree() {
     sheet.getRange(lastRow + 1, 1, newRows.length, rowWidth).setValues(newRows);
   }
 
-  Logger.log(`Employee sync complete. Added ${newRows.length}, filled ${locationsFilled} blank location(s), skipped ${skipped} (already present).`);
-  return { added: newRows.length, skipped: skipped, locationsFilled: locationsFilled };
+  Logger.log(`Employee sync complete. Added ${newRows.length} (Slack IDs resolved: ${slackIdsResolved}), filled ${locationsFilled} blank location(s), skipped ${skipped} (already present).`);
+  return { added: newRows.length, slackIdsResolved: slackIdsResolved, skipped: skipped, locationsFilled: locationsFilled };
 }
 
 /**

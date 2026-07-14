@@ -28,6 +28,20 @@ function fallbackProcessEmailsAndSendSlackMessage () {
   processEmailsAndSendSlackMessage()
 }
 
+function getOrCreateColumnIndex_(sheet, columnName) {
+  const lastCol = sheet.getLastColumn();
+  const headers = sheet.getRange(1, 1, 1, lastCol).getDisplayValues()[0]
+    .map(header => header.toString().trim());
+  const existing = headers.indexOf(columnName);
+  if (existing !== -1) return { index: existing, created: false };
+
+  const newCol = lastCol + 1;
+  sheet.insertColumnAfter(lastCol); // grows the grid so newCol always exists
+  sheet.getRange(1, newCol).setValue(columnName);
+  SpreadsheetApp.flush();
+  return { index: newCol - 1, created: true };
+}
+
 function processEmailsAndSendSlackMessage() {
   if (isWeekend() || isHoliday()) {
     console.log("Today is a weekend or holiday. No messages will be sent.");
@@ -75,9 +89,19 @@ function processEmailsAndSendSlackMessage() {
       logToDumpSheet(`Zoho People leave sync failed before Slack prompts: ${leaveSyncError.message}`);
     }
 
+    const slackIdCol = getOrCreateColumnIndex_(sheet, SLACK_USER_ID_COLUMN);
+    if (slackIdCol.created) {
+      data = sheet.getDataRange().getDisplayValues();
+      headers = data[0].map(header => header.toString().trim());
+      dateColIndex = headers.indexOf(todayDate);
+    }
+    const slackIdColIndex = slackIdCol.index;
+
     // Optional columns whose values ride along inside the Submit button value.
     const deptColIndex = headers.indexOf("Department");
     const locColIndex = headers.indexOf("Location");
+
+    const locations = getLocationsList();
 
     let currentStep = parseInt(props.getProperty('currentStep') || '0', 10);
     let currentFact = parseInt(props.getProperty('currentFact') || '0', 10);
@@ -104,9 +128,16 @@ function processEmailsAndSendSlackMessage() {
         const department = deptColIndex !== -1 ? (row[deptColIndex]?.toString().trim() || "") : "";
         const location = locColIndex !== -1 ? (row[locColIndex]?.toString().trim() || "") : "";
         try {
-          const userInfo = getUserInfoByEmail(email);
-          if (!userInfo || !userInfo.id) throw new Error(`No user found for email ${email}`);
-          const result = collectEmployeeLocationMessage(userInfo.id, name, email, currentStep, currentFact, department, location);
+          let slackId = slackIdColIndex !== -1 ? (row[slackIdColIndex]?.toString().trim() || "") : "";
+          if (!slackId) {
+            const userInfo = getUserInfoByEmail(email);
+            if (!userInfo || !userInfo.id) throw new Error(`No user found for email ${email}`);
+            slackId = userInfo.id;
+            if (slackIdColIndex !== -1) {
+              sheet.getRange(i + 1, slackIdColIndex + 1).setValue(slackId); // cache for next run
+            }
+          }
+          const result = collectEmployeeLocationMessage(slackId, name, email, currentStep, currentFact, department, location, locations);
           if (result.success) {
             sheet.getRange(i + 1, dateColIndex + 1).setValue("Pending");
             SpreadsheetApp.flush();
@@ -212,6 +243,16 @@ function processPendingEmailsAndSendSlackReminder() {
       logToDumpSheet(`Zoho People leave sync failed before Slack reminders: ${leaveSyncError.message}`);
     }
 
+    // Reuse the cached Slack user IDs written by the prompt flow so reminders
+    // don't call users.lookupByEmail again for each pending user.
+    const slackIdCol = getOrCreateColumnIndex_(sheet, SLACK_USER_ID_COLUMN);
+    if (slackIdCol.created) {
+      data = sheet.getDataRange().getDisplayValues();
+      headers = data[0].map(header => header.toString().trim());
+      dateColIndex = headers.indexOf(todayDate);
+    }
+    const slackIdColIndex = slackIdCol.index;
+
     let sentCount = 0;
     let failedCount = 0;
     for (let i = 1; i < data.length; i++) {
@@ -227,10 +268,17 @@ function processPendingEmailsAndSendSlackReminder() {
         }
         console.log(email);
         try {
-          const userInfo = getUserInfoByEmail(email);
-          if (!userInfo || !userInfo.id) throw new Error(`No user found for email ${email}`);
+          let slackId = slackIdColIndex !== -1 ? (row[slackIdColIndex]?.toString().trim() || "") : "";
+          if (!slackId) {
+            const userInfo = getUserInfoByEmail(email);
+            if (!userInfo || !userInfo.id) throw new Error(`No user found for email ${email}`);
+            slackId = userInfo.id;
+            if (slackIdColIndex !== -1) {
+              sheet.getRange(i + 1, slackIdColIndex + 1).setValue(slackId); // cache for next run
+            }
+          }
           let textMessage = `📍 ${name}, please submit your location for today. Are you at HQ, home, or on-site? Update now to keep MissionHQ informed.`
-          const result = sendSlackConfirmationMessage(userInfo.id, textMessage);
+          const result = sendSlackConfirmationMessage(slackId, textMessage);
           if (result.success) {
             sheet.getRange(i + 1, dateColIndex + 1).setValue("Pending");
             SpreadsheetApp.flush();

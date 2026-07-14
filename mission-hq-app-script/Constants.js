@@ -13,6 +13,7 @@ function getOptionalScriptProperty_(key, fallback) {
 const CANDIDATE_SHEET_NAME = "MissionHQ Log";
 const SLACK_RESPONSES_SHEET_NAME = "MissionHQ Log";
 const LOCATIONS_SHEET_NAME = "Locations";
+const SLACK_USER_ID_COLUMN = "Slack User ID";
 
 const SLACK_BOT_TOKEN = getRequiredScriptProperty_("SLACK_BOT_TOKEN");
 const SLACK_USER_TOKEN = getRequiredScriptProperty_("SLACK_USER_TOKEN");

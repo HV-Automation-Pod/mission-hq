@@ -12,7 +12,7 @@ function testCollectEmployeeLocationMessageToAlertUser() {
   );
 }
 
-function collectEmployeeLocationMessage(userId, name, email, currentStep, currentFact, department, location) {
+function collectEmployeeLocationMessage(userId, name, email, currentStep, currentFact, department, location, locations) {
   const url = 'https://slack.com/api/chat.postMessage';
 
   if (currentStep === undefined || currentStep === null || isNaN(currentStep)) {
@@ -29,7 +29,9 @@ function collectEmployeeLocationMessage(userId, name, email, currentStep, curren
 
   const fullMessage = `${message}\n\n*Fun Fact:* ${trivia}`;
 
-  const locations = getLocationsList();
+  if (!locations || locations.length === 0) {
+    locations = getLocationsList();
+  }
   // Logger.log(`Retrieved locations: ${JSON.stringify(locations)}`);
 
   // Check if locations are available and valid
