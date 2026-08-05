@@ -50,8 +50,9 @@ function collectEmployeeLocationMessage(userId, name, email, currentStep, curren
     value: item.value.replace(/\s+/g, "-") // Replace spaces with hyphens
   }));
 
-  const today = new Date();
-  const date = Utilities.formatDate(today, 'Asia/Kolkata', 'yyyy-MM-dd');
+  // Normally the prompt is for "today"; a backfill can pass an explicit
+  // yyyy-MM-dd so the Submit button records against the right day.
+  const date = Utilities.formatDate(new Date(), 'Asia/Kolkata', 'yyyy-MM-dd');
 
   // Identity metadata carried inside the Submit button value (invisible to the
   // user — this does NOT change any visible message block). The edge function

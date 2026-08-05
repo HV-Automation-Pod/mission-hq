@@ -112,6 +112,22 @@ SlackData.js       Slack user/channel data sync
 - Approved Zoho People leaves are marked as `Leave` in the sheet.
 - People marked `Leave` are skipped by the prompt/reminder bot.
 - Pending Zoho People leaves are logged in the test function but are not applied to attendance.
+- **Leave → sheet matching is by Employee ID, not email.** Zoho's leave records
+  carry **no employee email** — only `EmployeeId` (the org-tree `emp_id`), a
+  display `Employee` name, `ZUID`, and `Employee.ID`. They occasionally include
+  `TeamEmailID`, which is the **reporting manager's** email — it must NOT be
+  used as the employee (an earlier bug read it and marked the manager, e.g. sai,
+  as `Leave`, silently suppressing their prompts). The sync joins each approved
+  leave to the sheet by **`EmployeeId` → sheet Employee ID column**, falling back
+  to normalized name for rows without an emp id. Both keys are normalized
+  (lowercase / punctuation-insensitive; emp ids like `348C` compared
+  case-insensitively). Unmatched leaves are logged (`no matching sheet row`) so
+  nobody is silently skipped. The `Leave` write still won't overwrite a real
+  submitted status — only blank/`Pending`. See
+  [Employee Sync](#employee-sync-from-zoho-org-tree-syncemployeesjs) for how the
+  Employee ID column is populated. Key functions in `ZohoPeople.js`:
+  `getZohoPeopleLeaveIdentitiesForDate`, `buildSheetEmployeeLookups_`,
+  `matchLeaveToSheet_`, `syncZohoPeopleLeavesForDate`.
 - All users now submit through the `submit_location_...` button path.
 - Static dropdown changes intentionally return an empty response and wait for the user to click Submit.
 - Submit button value carries the date, the trivia/fact index, and (newer
@@ -251,6 +267,13 @@ GET /api/v2/leavetracker/leaves/records
 
 Base domain is configured through Apps Script Properties and defaults in code.
 
+Note: the leave record has **no employee email field** — join to the sheet by
+`EmployeeId` (see [Attendance Behavior](#attendance-behavior)). Each record
+carries `EmployeeId`, `Employee` (name), `ZUID`, `Employee.ID`, `From`, `To`,
+`ApprovalStatus`, and a per-day `Days` map (some in-range days have
+`LeaveCount: 0.0`, e.g. weekends — currently we use the `From`→`To` range, not
+the `Days` map).
+
 Request params:
 
 ```text
@@ -310,15 +333,27 @@ org-tree endpoint and syncs employees into the MissionHQ Log sheet. Idempotent.
 - Reads the endpoint URL from the `ZOHO_ORG_TREE_URL` Apps Script Property, with
   optional `ZOHO_ORG_TREE_TOKEN` sent as both `Authorization: Bearer` and
   `apikey` headers. Expects JSON `{ total_active, employees: [...] }` where each
-  employee has `email`, `first_name`, `last_name`, `department`, `location`, etc.
+  employee has `email`, `first_name`, `last_name`, `department`, `location`,
+  **`emp_id`**, etc. (`emp_id` values look like `551` or `348C` for contractors).
 - New employees (email not in the sheet) → appends a row with Full Name / Email
-  Address / **Slack User ID** / Department / **Location**. The Slack User ID is
-  resolved once from the email via `getUserInfoByEmail` at sync time (best-effort
-  — blank if the hire isn't in Slack yet; the daily flow fills it later). See
-  [Slack User ID Cache](#slack-user-id-cache-per-run-efficiency).
-- Existing employees → fills the **Location** cell only when it is currently
-  blank (never overwrites a value already in the sheet). Batched single write.
-- All columns are found by header name (`indexOf`), never by position.
+  Address / **Slack User ID** / Department / **Location** / **Employee ID**. The
+  Slack User ID is resolved once from the email via `getUserInfoByEmail` at sync
+  time (best-effort — blank if the hire isn't in Slack yet; the daily flow fills
+  it later). See [Slack User ID Cache](#slack-user-id-cache-per-run-efficiency).
+- Existing employees:
+  - **Location** — filled only when the cell is blank (never overwrites).
+  - **Slack User ID** — filled only when blank (resolved via `getUserInfoByEmail`).
+  - **Employee ID** — kept **in sync with Zoho**: overwritten whenever the
+    org-tree `emp_id` differs from the sheet (not just when blank), because an
+    id can change (e.g. contractor `348C` converting to full-time `348`). This is
+    the deliberate exception to the fill-only-if-blank rule.
+- The **Employee ID** column is the join key the leave sync uses (see
+  [Attendance Behavior](#attendance-behavior)). Its header is looked up via
+  `ZOHO_ATTENDANCE_EMPID_COLUMNS` candidates (`Zoho Emp ID`, `Employee ID`, …);
+  if none exist it is created as `EMPLOYEE_ID_COLUMN` (`"Employee ID"`). The same
+  column is what the Zoho attendance push reads for its `empId`.
+- All columns are found by header name (`indexOf` / candidate match), never by
+  position. Each touched column is written back in one batched `setValues`.
 - The `Location` filled here is the geographic site (Bengaluru, etc.) — the same
   column the Zoho attendance push reads for its punch site.
 

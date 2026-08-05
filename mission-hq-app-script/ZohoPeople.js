@@ -266,40 +266,64 @@ function getNestedZohoValue_(record, keys) {
   return "";
 }
 
-function extractZohoLeaveEmail_(record) {
-  const directEmail = getNestedZohoValue_(record, [
-    "TeamEmailID",
-    "EmailID",
-    "Email_ID",
-    "Employee Email",
-    "Employee_Email",
-    "email",
-    "Email"
-  ]);
-  if (directEmail && typeof directEmail === "string" && directEmail.indexOf("@") !== -1) {
-    return directEmail.trim().toLowerCase();
-  }
+// Zoho leave records carry no employee email — only an `EmployeeId` (the same
+// `emp_id` SyncEmployees writes to the sheet), a display name (`Employee`),
+// `ZUID` and `Employee.ID`. We join a leave to the sheet by emp id, falling back
+// to name for rows not yet carrying an emp id. Both keys are normalized so
+// trivial formatting/case differences still match.
+function normalizeEmpId_(value) {
+  return String(value == null ? "" : value).trim().toLowerCase();
+}
 
-  const employee = getNestedZohoValue_(record, [
-    "Employee_ID",
-    "employee",
+function normalizeLeaveName_(name) {
+  return String(name || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function extractZohoLeaveName_(record) {
+  const name = getNestedZohoValue_(record, [
     "Employee",
-    "EmployeeID"
+    "EmployeeName",
+    "Employee_Name",
+    "Name",
+    "employeeName"
   ]);
-  if (employee && typeof employee === "object") {
-    const nestedEmail = getNestedZohoValue_(employee, [
-      "EmailID",
-      "Email_ID",
-      "email",
-      "Email",
-      "mailid"
-    ]);
-    if (nestedEmail && typeof nestedEmail === "string" && nestedEmail.indexOf("@") !== -1) {
-      return nestedEmail.trim().toLowerCase();
-    }
-  }
+  return typeof name === "string" ? name.trim() : "";
+}
 
-  return "";
+function extractZohoLeaveEmpId_(record) {
+  return normalizeEmpId_(getNestedZohoValue_(record, ["EmployeeId", "Employee_ID", "EmployeeID"]));
+}
+
+// Returns { empId, name, rawName } for each approved leave covering the date.
+function getZohoPeopleLeaveIdentitiesForDate(dateString) {
+  const response = fetchZohoPeopleRecords_(ZOHO_PEOPLE_LEAVE_RECORD_PATHS, {
+    from: dateString,
+    to: dateString,
+    dateFormat: "yyyy-MM-dd",
+    approvalStatus: JSON.stringify(["APPROVED"]),
+    dataSelect: "ALL",
+    startIndex: 0,
+    limit: 200
+  });
+  const records = normalizeZohoPeopleRecordList_(response);
+  const identities = [];
+
+  records.forEach(record => {
+    if (!isZohoLeaveApproved_(record)) return;
+    if (!isZohoLeaveOnDate_(record, dateString)) return;
+
+    const rawName = extractZohoLeaveName_(record);
+    identities.push({
+      empId: extractZohoLeaveEmpId_(record),
+      name: normalizeLeaveName_(rawName),
+      rawName: rawName
+    });
+  });
+
+  return identities;
 }
 
 function parseZohoPeopleDate_(value) {
@@ -386,34 +410,6 @@ function isZohoLeaveOnDate_(record, dateString) {
   return from <= dateString && dateString <= to;
 }
 
-function getZohoPeopleLeaveEmailsForDate(dateString) {
-  const response = fetchZohoPeopleRecords_(ZOHO_PEOPLE_LEAVE_RECORD_PATHS, {
-    from: dateString,
-    to: dateString,
-    dateFormat: "yyyy-MM-dd",
-    approvalStatus: JSON.stringify(["APPROVED"]),
-    dataSelect: "ALL",
-    startIndex: 0,
-    limit: 200
-  });
-  const records = normalizeZohoPeopleRecordList_(response);
-  const emails = new Set();
-
-  records.forEach(record => {
-    if (!isZohoLeaveApproved_(record)) return;
-    if (!isZohoLeaveOnDate_(record, dateString)) return;
-
-    const email = extractZohoLeaveEmail_(record);
-    if (email) {
-      emails.add(email);
-    } else {
-      Logger.log(`Zoho leave record has no extractable email: ${JSON.stringify(record)}`);
-    }
-  });
-
-  return emails;
-}
-
 function getZohoPeopleLeaveRecordsForDateAndStatuses_(dateString, statuses) {
   const response = fetchZohoPeopleRecords_(ZOHO_PEOPLE_LEAVE_RECORD_PATHS, {
     from: dateString,
@@ -429,7 +425,7 @@ function getZohoPeopleLeaveRecordsForDateAndStatuses_(dateString, statuses) {
   return records
     .filter(record => isZohoLeaveOnDate_(record, dateString))
     .map(record => ({
-      email: extractZohoLeaveEmail_(record),
+      empId: getNestedZohoValue_(record, ["EmployeeId", "Employee_ID", "EmployeeID"]),
       name: getNestedZohoValue_(record, [
         "Employee",
         "EmployeeName",
@@ -483,24 +479,69 @@ function debugLogZohoPeopleRawLeaveRecords_() {
   });
 }
 
+// Builds lookups from the MissionHQ Log so a Zoho leave (emp id + name, no
+// email) can be resolved to a sheet row: byEmpId and byName each map a
+// normalized key -> { row (1-based), email, name, empId }.
+function buildSheetEmployeeLookups_(data, headers) {
+  const nameColIndex = headers.indexOf("Full Name");
+  const emailColIndex = headers.indexOf("Email Address");
+  const empIdColIndex = findColumnIndexByCandidates_(headers, ZOHO_ATTENDANCE_EMPID_COLUMNS);
+
+  const byEmpId = {};
+  const byName = {};
+  for (let i = 1; i < data.length; i++) {
+    const name = nameColIndex === -1 ? "" : (data[i][nameColIndex] || "").toString().trim();
+    const entry = {
+      row: i + 1,
+      name: name,
+      email: emailColIndex === -1 ? "" : (data[i][emailColIndex] || "").toString().trim().toLowerCase(),
+      empId: empIdColIndex === -1 ? "" : normalizeEmpId_(data[i][empIdColIndex])
+    };
+    if (entry.empId && !byEmpId[entry.empId]) byEmpId[entry.empId] = entry;
+    const nameKey = normalizeLeaveName_(name);
+    if (nameKey && !byName[nameKey]) byName[nameKey] = entry;
+  }
+  return { byEmpId: byEmpId, byName: byName };
+}
+
+// Resolves a leave { empId, name } to a sheet entry: emp id first, name
+// fallback. Returns { entry, matchBy } (entry null if unmatched).
+function matchLeaveToSheet_(lookups, empKey, nameKey) {
+  if (empKey && lookups.byEmpId[empKey]) return { entry: lookups.byEmpId[empKey], matchBy: "empId" };
+  if (nameKey && lookups.byName[nameKey]) return { entry: lookups.byName[nameKey], matchBy: "name" };
+  return { entry: null, matchBy: "none" };
+}
+
 function logZohoPeopleLeavesForDates_(label, dates, includeRawDebug) {
   Logger.log(`===== Zoho People Leaves: ${label} =====`);
   if (includeRawDebug) {
     debugLogZohoPeopleRawLeaveRecords_();
   }
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CANDIDATE_SHEET_NAME);
+  if (!sheet) throw new Error(`Sheet ${CANDIDATE_SHEET_NAME} not found`);
+  const data = sheet.getDataRange().getDisplayValues();
+  const lookups = buildSheetEmployeeLookups_(data, data[0].map(h => h.toString().trim()));
+
   dates.forEach(dateString => {
     const leaves = getZohoPeopleLeaveRecordsForDateAndStatuses_(dateString, ["APPROVED", "PENDING"]);
     Logger.log(`${dateString}: ${leaves.length} leave record(s)`);
 
     leaves.forEach(leave => {
+      const { entry, matchBy } = matchLeaveToSheet_(lookups, normalizeEmpId_(leave.empId), normalizeLeaveName_(leave.name));
       Logger.log(JSON.stringify({
         date: dateString,
         name: leave.name,
-        email: leave.email,
+        empId: leave.empId,
+        matchedRow: entry ? entry.row : null,
+        resolvedEmail: entry ? entry.email : "",
+        matchBy: matchBy,
         from: leave.from,
         to: leave.to,
         status: leave.status
       }));
+      if (!entry) {
+        Logger.log(`NO SHEET MATCH for Zoho leave "${leave.name}" empId=${leave.empId} on ${dateString} — would NOT be marked Leave`);
+      }
     });
   });
   Logger.log(`===== End Zoho People Leaves: ${label} =====`);
@@ -517,63 +558,61 @@ function syncZohoPeopleLeavesForDate(dateString) {
 
   const data = sheet.getDataRange().getDisplayValues();
   const headers = data[0].map(header => header.toString().trim());
-  const nameColIndex = headers.indexOf("Full Name");
-  const emailColIndex = headers.indexOf("Email Address");
   const dateColIndex = headers.indexOf(dateString);
-
-  if (emailColIndex === -1) throw new Error("Column 'Email Address' not found");
   if (dateColIndex === -1) throw new Error(`Date column ${dateString} not found`);
 
   Logger.log(`Zoho People leave sync started for ${dateString}`);
-  const leaveEmails = getZohoPeopleLeaveEmailsForDate(dateString);
-  Logger.log(`Zoho People leave API completed for ${dateString}: ${leaveEmails.size} leave email(s) found`);
-  Logger.log(`Zoho People leave email list for ${dateString}: ${JSON.stringify(Array.from(leaveEmails))}`);
+  const identities = getZohoPeopleLeaveIdentitiesForDate(dateString);
+  Logger.log(`Zoho People leave API completed for ${dateString}: ${identities.length} approved leave(s) found`);
+
+  const lookups = buildSheetEmployeeLookups_(data, headers);
 
   let updated = 0;
   const markedLeaves = [];
   const skippedLeaves = [];
+  const unmatchedLeaves = [];
+  const processedRows = {};
 
-  for (let i = 1; i < data.length; i++) {
-    const email = data[i][emailColIndex] ? data[i][emailColIndex].toString().trim().toLowerCase() : "";
-    if (!email || !leaveEmails.has(email)) continue;
+  identities.forEach(identity => {
+    const { entry, matchBy } = matchLeaveToSheet_(lookups, identity.empId, identity.name);
+    if (!entry) {
+      unmatchedLeaves.push({ empId: identity.empId, name: identity.rawName });
+      return;
+    }
+    if (processedRows[entry.row]) return; // same sheet row already handled this run
+    processedRows[entry.row] = true;
 
-    const name = nameColIndex === -1 ? "" : data[i][nameColIndex].toString().trim();
-    const currentStatus = data[i][dateColIndex] ? data[i][dateColIndex].toString().trim() : "";
+    const currentStatus = data[entry.row - 1][dateColIndex] ? data[entry.row - 1][dateColIndex].toString().trim() : "";
     if (currentStatus && currentStatus !== "Pending" && currentStatus !== "Leave") {
-      Logger.log(`Skipping Zoho leave overwrite for ${email} on ${dateString}; existing status is ${currentStatus}`);
-      skippedLeaves.push({
-        row: i + 1,
-        name: name,
-        email: email,
-        existingStatus: currentStatus
-      });
-      continue;
+      skippedLeaves.push({ row: entry.row, name: entry.name, email: entry.email, existingStatus: currentStatus });
+      return;
     }
 
     if (currentStatus !== "Leave") {
-      sheet.getRange(i + 1, dateColIndex + 1).setValue("Leave");
+      sheet.getRange(entry.row, dateColIndex + 1).setValue("Leave");
       updated++;
-      markedLeaves.push({
-        row: i + 1,
-        name: name,
-        email: email
-      });
+      markedLeaves.push({ row: entry.row, name: entry.name, email: entry.email, matchBy: matchBy });
     }
-  }
+  });
 
   if (updated > 0) SpreadsheetApp.flush();
   Logger.log(`Zoho People users marked Leave for ${dateString}: ${JSON.stringify(markedLeaves)}`);
   if (skippedLeaves.length > 0) {
     Logger.log(`Zoho People leave matches skipped for ${dateString}: ${JSON.stringify(skippedLeaves)}`);
   }
-  Logger.log(`Zoho People leave sync completed for ${dateString}: ${updated} row(s) marked Leave, ${leaveEmails.size} leave email(s) found.`);
+  if (unmatchedLeaves.length > 0) {
+    // No sheet row for this emp id / name — run Sync Employees so emp ids are
+    // filled, or check the name. These people are NOT marked Leave.
+    Logger.log(`Zoho People leaves with no matching sheet row for ${dateString}: ${JSON.stringify(unmatchedLeaves)}`);
+  }
+  Logger.log(`Zoho People leave sync completed for ${dateString}: ${updated} row(s) marked Leave, ${identities.length} approved leave(s) found.`);
 
   return {
     success: true,
     date: dateString,
-    leaveEmails: Array.from(leaveEmails),
     markedLeaves: markedLeaves,
     skippedLeaves: skippedLeaves,
+    unmatchedLeaves: unmatchedLeaves,
     updated: updated
   };
 }

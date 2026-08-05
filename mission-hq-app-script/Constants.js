@@ -42,5 +42,41 @@ const ZOHO_PEOPLE_LEAVE_RECORD_PATHS = [
 const ZOHO_PEOPLE_SCOPES = [
   "ZOHOPEOPLE.leave.READ",
   "ZOHOPEOPLE.forms.READ",
-  "ZOHOPEOPLE.employee.ALL"
+  "ZOHOPEOPLE.employee.ALL",
+  "ZOHOPEOPLE.attendance.ALL"
+];
+
+// ----- Zoho People attendance push (MissionHQ -> Zoho, ZohoAttendance.js) -----
+// Classic People API bulk-import endpoint (under /people/api, unlike the v2
+// leave endpoint). Resolved against getZohoPeopleApiDomains_() with fallback.
+const ZOHO_PEOPLE_ATTENDANCE_BULK_PATHS = [
+  "/people/api/attendance/bulkImport"
+];
+// Zoho Bulk Import dateFormat for the check-in timestamp.
+const ZOHO_ATTENDANCE_DATETIME_FORMAT = "yyyy-MM-dd HH:mm:ss";
+// Nominal check-in time (HH:mm:ss) used when no ZOHO_ATTENDANCE_CHECKIN_TIME
+// property is set. Phase 1 sends check-in only (no check-out / hours).
+const ZOHO_ATTENDANCE_DEFAULT_CHECKIN_TIME = "09:30:00";
+// Statuses NOT pushed to Zoho (compared lower-cased). Blank cells are already
+// skipped separately; only "Pending" (unanswered prompt) is filtered here.
+const ZOHO_ATTENDANCE_NON_PUSH_STATUSES = ["pending"];
+// Candidate header names for an optional Zoho employee-id column in the Log.
+// Matched case/space/punctuation-insensitively; when present, records use
+// empId instead of emailId. Blank if absent -> falls back to emailId.
+const ZOHO_ATTENDANCE_EMPID_COLUMNS = [
+  "Zoho Emp ID",
+  "Zoho Employee ID",
+  "Employee ID",
+  "Emp ID",
+  "empId"
+];
+
+const EMPLOYEE_ID_COLUMN = "Employee ID";
+// Candidate header names for the geographic punch site (e.g. Bengaluru).
+// Read from the Log's own Location column; omitted from the record if blank.
+const ZOHO_ATTENDANCE_SITE_COLUMNS = [
+  "Location",
+  "Site",
+  "Office Location",
+  "Work Location"
 ];
