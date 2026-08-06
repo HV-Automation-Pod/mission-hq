@@ -5,7 +5,5 @@ function onOpen() {
     .addSeparator()
     .addItem("Authorize Zoho People", "startZohoPeopleAuthorization")
     .addSeparator()
-    .addItem("Preview Attendance Push (dry run)", "testLogZohoAttendancePayload")
-    .addItem("Push Attendance to Zoho (Today)", "syncTodayAttendanceToZoho")
     .addToUi();
 }

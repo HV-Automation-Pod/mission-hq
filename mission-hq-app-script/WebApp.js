@@ -15,7 +15,7 @@ function doGet(e) {
         result = e.parameter.date ? syncZohoPeopleLeavesForDate(e.parameter.date) : syncTodayZohoPeopleLeaves();
         break;
       case "syncZohoAttendance":
-        result = e.parameter.date ? syncAttendanceToZohoForDate(e.parameter.date) : syncTodayAttendanceToZoho();
+        result = e.parameter.date ? syncAttendanceToZohoForDate(e.parameter.date) : syncYesterdayAttendanceToZoho();
         break;
       case "all":
         result = getAllEmployeeData();

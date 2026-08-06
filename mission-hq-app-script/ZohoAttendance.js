@@ -10,6 +10,10 @@ function getZohoAttendanceCheckInTime_() {
   return getOptionalScriptProperty_("ZOHO_ATTENDANCE_CHECKIN_TIME", ZOHO_ATTENDANCE_DEFAULT_CHECKIN_TIME);
 }
 
+function getZohoAttendanceCheckOutTime_() {
+  return getOptionalScriptProperty_("ZOHO_ATTENDANCE_CHECKOUT_TIME", ZOHO_ATTENDANCE_DEFAULT_CHECKOUT_TIME);
+}
+
 function findColumnIndexByCandidates_(headers, candidates) {
   const normalized = headers.map(header => header.toLowerCase().replace(/[^a-z0-9]/g, ""));
   for (const candidate of candidates) {
@@ -43,9 +47,13 @@ function buildZohoAttendanceRecordsForDate_(dateString) {
   if (emailColIndex === -1) throw new Error("Column 'Email Address' not found");
   if (dateColIndex === -1) throw new Error(`Date column ${dateString} not found`);
 
+  // Both ends are sent: Zoho derives worked hours from the pair, and a check-in
+  // on its own leaves the day at 0 hours, which the muster roll marks Absent.
   const checkIn = `${dateString} ${getZohoAttendanceCheckInTime_()}`;
+  const checkOut = `${dateString} ${getZohoAttendanceCheckOutTime_()}`;
 
   const records = [];
+  const details = []; // index-aligned with records: who each one is, for logging
   const skipped = [];
 
   for (let i = 1; i < data.length; i++) {
@@ -61,7 +69,7 @@ function buildZohoAttendanceRecordsForDate_(dateString) {
       continue;
     }
 
-    const record = { checkIn: checkIn };
+    const record = { checkIn: checkIn, checkOut: checkOut };
     const site = siteColIndex !== -1 && data[i][siteColIndex] ? data[i][siteColIndex].toString().trim() : "";
     if (site) record.location = site; // Geographic site from the Log's Location column (e.g. Bengaluru).
 
@@ -72,16 +80,122 @@ function buildZohoAttendanceRecordsForDate_(dateString) {
       record.emailId = email;
     }
     records.push(record);
+    details.push({
+      row: i + 1,
+      name: name,
+      email: email,
+      empId: empId,
+      status: status,
+      site: site,
+      identifiedBy: empId ? "empId" : "emailId"
+    });
   }
 
-  return { records: records, skipped: skipped };
+  return { records: records, details: details, skipped: skipped };
+}
+
+/** "row 3 · Divya Prakash · divya.p@hyperverge.co · empId 381 · Office · Bengaluru" */
+function describeAttendanceRecord_(detail) {
+  if (!detail) return "(no detail)";
+  const identifier = detail.empId ? `empId ${detail.empId}` : `emailId ${detail.email}`;
+  return `row ${detail.row} · ${detail.name || "(no name)"} · ${detail.email} · ${identifier} · ` +
+    `${detail.status}${detail.site ? " · " + detail.site : ""}`;
+}
+
+function getZohoAttendanceBatchSize_() {
+  const configured = parseInt(
+    getOptionalScriptProperty_("ZOHO_ATTENDANCE_BATCH_SIZE", String(ZOHO_ATTENDANCE_DEFAULT_BATCH_SIZE)),
+    10
+  );
+  return isNaN(configured) || configured < 1 ? ZOHO_ATTENDANCE_DEFAULT_BATCH_SIZE : configured;
 }
 
 /**
- * POSTs an attendance record array to the Zoho Bulk Import API, trying each
- * configured domain until one succeeds.
+ * POSTs attendance records to the Zoho Bulk Import API, grouped by identifier
+ * type and then chunked into batches.
+ *
+ * Any array containing an `emailId` record is rejected — the whole request 400s
+ * with a generic code 7200 "API invocation failed" naming no field, so one bad
+ * record takes down the batch it travels in. Established by probe on
+ * 2026-08-05: 50 mixed records failed, the same 50 minus the single emailId row
+ * passed, and that emailId row then failed alone in a batch of one.
+ *
+ * Hence: group by identifier so an emailId record cannot poison the empId
+ * batches, and treat an emailId failure as non-fatal — those rows have a blank
+ * Employee ID, they are few, and losing one must not cost the other 237. Fix
+ * them at the source by filling Employee ID (Sync Employees from Zoho) rather
+ * than expecting emailId to start working.
  */
-function pushZohoAttendanceBulkImport_(records) {
+function pushZohoAttendanceBulkImport_(records, details) {
+  const batchSize = getZohoAttendanceBatchSize_();
+  const groups = [
+    { key: "empId", records: [], details: [] },
+    { key: "emailId", records: [], details: [] }
+  ];
+
+  records.forEach((record, index) => {
+    const group = record.empId ? groups[0] : groups[1];
+    group.records.push(record);
+    group.details.push(details ? details[index] : null);
+  });
+
+  Logger.log(
+    `Zoho bulk import: ${groups[0].records.length} empId record(s), ` +
+    `${groups[1].records.length} emailId record(s), batch size ${batchSize}`
+  );
+
+  const responses = [];
+  let pushed = 0;
+  const notPushed = [];
+
+  groups.forEach(group => {
+    if (group.records.length === 0) return;
+
+    const batches = [];
+    const batchDetails = [];
+    for (let i = 0; i < group.records.length; i += batchSize) {
+      batches.push(group.records.slice(i, i + batchSize));
+      batchDetails.push(group.details.slice(i, i + batchSize));
+    }
+
+    batches.forEach((batch, index) => {
+      if (responses.length > 0 || index > 0) Utilities.sleep(ZOHO_ATTENDANCE_BATCH_PAUSE_MS);
+      Logger.log(`Bulk import [${group.key}] batch ${index + 1}/${batches.length}: ${batch.length} record(s)`);
+      try {
+        responses.push(pushZohoAttendanceBatch_(batch));
+        pushed += batch.length;
+      } catch (error) {
+        Logger.log(`Bulk import [${group.key}] batch ${index + 1}/${batches.length} FAILED (${batch.length} records)`);
+        (batchDetails[index] || []).forEach(detail => {
+          Logger.log(`  not pushed: ${describeAttendanceRecord_(detail)}`);
+          if (detail) notPushed.push(detail);
+        });
+
+        if (group.key === "empId") {
+          // The bulk of the org — a failure here is a real problem, and earlier
+          // batches already reached Zoho, so say so before stopping.
+          throw new Error(`${group.key} batch ${index + 1} of ${batches.length}: ${error.message}`);
+        }
+        Logger.log(
+          `Continuing — these rows have a blank Employee ID. Run "Sync Employees from Zoho" ` +
+          `to fill it, then re-run this date.`
+        );
+      }
+    });
+  });
+
+  return {
+    batches: responses.length,
+    pushed: pushed,
+    notPushed: notPushed,
+    responseCode: responses.length ? responses[responses.length - 1].responseCode : null,
+    responseText: responses.map(response => response.responseText).join(" | "),
+    url: responses.length ? responses[responses.length - 1].url : ""
+  };
+}
+
+/** Sends one batch, trying each domain/path until one succeeds. */
+function pushZohoAttendanceBatch_(records) {
   const payload = {
     data: JSON.stringify(records),
     dateFormat: ZOHO_ATTENDANCE_DATETIME_FORMAT
@@ -141,32 +255,198 @@ function syncAttendanceToZohoForDate(dateString) {
   }
 
   Logger.log(`Zoho attendance push for ${dateString}: sending ${built.records.length} record(s)`);
-  const result = pushZohoAttendanceBulkImport_(built.records);
-  Logger.log(`Zoho attendance push completed for ${dateString}: ${built.records.length} sent, ${built.skipped.length} skipped`);
+  logAttendanceRecordDetails_(built);
+  const result = pushZohoAttendanceBulkImport_(built.records, built.details);
+  Logger.log(
+    `Zoho attendance push completed for ${dateString}: ${result.pushed} of ${built.records.length} sent, ` +
+    `${result.notPushed.length} rejected, ${built.skipped.length} skipped (blank/Pending)`
+  );
 
   return {
     success: true,
     date: dateString,
-    pushed: built.records.length,
+    pushed: result.pushed,
+    notPushed: result.notPushed,
     skipped: built.skipped.length,
     skippedDetails: built.skipped,
     response: result.responseText
   };
 }
 
-function syncTodayAttendanceToZoho() {
-  const todayDate = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd");
-  return syncAttendanceToZohoForDate(todayDate);
+/**
+ * Yesterday's date in the script timezone. Derived from the timezone-formatted
+ * date rather than by subtracting from a raw Date, so a run near midnight in a
+ * different server timezone cannot land on the wrong day.
+ */
+function getZohoAttendanceSyncDate_() {
+  const tz = Session.getScriptTimeZone();
+  const parts = Utilities.formatDate(new Date(), tz, "yyyy-MM-dd").split("-");
+  const date = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]));
+  date.setDate(date.getDate() - 1);
+  return Utilities.formatDate(date, tz, "yyyy-MM-dd");
+}
+
+/** True when the MissionHQ Log has a column for that date. */
+function hasMissionHqDateColumn_(dateString) {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CANDIDATE_SHEET_NAME);
+  if (!sheet) throw new Error(`Sheet ${CANDIDATE_SHEET_NAME} not found`);
+  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getDisplayValues()[0]
+    .map(header => header.toString().trim());
+  return headers.indexOf(dateString) !== -1;
 }
 
 /**
- * Dry run: logs exactly what would be sent for today without calling Zoho.
+ * Pushes YESTERDAY's attendance — the day is complete by then, whereas pushing
+ * today would send a half-finished day (most rows still "Pending").
+ *
+ * A missing date column is a normal no-op, not an error: it means no prompts
+ * went out that day (weekend or holiday).
+ */
+function syncYesterdayAttendanceToZoho() {
+  const syncDate = getZohoAttendanceSyncDate_();
+  if (!hasMissionHqDateColumn_(syncDate)) {
+    const message = `No ${syncDate} column in ${CANDIDATE_SHEET_NAME} — weekend, holiday, or no prompts sent.`;
+    Logger.log(`Zoho attendance push skipped: ${message}`);
+    return { success: true, date: syncDate, pushed: 0, skipped: 0, message: message };
+  }
+  return syncAttendanceToZohoForDate(syncDate);
+}
+
+/**
+ * Diagnostic: sends ONE real record for yesterday and logs Zoho's full reply.
+ *
+ * Use it to tell the two failure modes apart when a push 400s:
+ *   - one record succeeds -> the payload shape is fine, the batch was too big
+ *     (lower ZOHO_ATTENDANCE_BATCH_SIZE)
+ *   - one record fails    -> the record shape or the scope is wrong, and the
+ *     response text here names the reason
+ */
+function testPushSingleZohoAttendanceRecord() {
+  const syncDate = getZohoAttendanceSyncDate_();
+  if (!hasMissionHqDateColumn_(syncDate)) {
+    Logger.log(`No ${syncDate} column in ${CANDIDATE_SHEET_NAME} — nothing to send.`);
+    return null;
+  }
+
+  const built = buildZohoAttendanceRecordsForDate_(syncDate);
+  if (built.records.length === 0) {
+    Logger.log(`No pushable records for ${syncDate}.`);
+    return null;
+  }
+
+  const record = built.records[0];
+  Logger.log(`Sending a single record for ${syncDate}`);
+  Logger.log(`  Who:     ${describeAttendanceRecord_(built.details[0])}`);
+  Logger.log(`  Payload: ${JSON.stringify(record)}`);
+  try {
+    const result = pushZohoAttendanceBatch_([record]);
+    Logger.log(`SUCCESS via ${result.url}. Response: ${result.responseText}`);
+    Logger.log("Payload shape is valid — a failing full run is a batch-size problem. " +
+      "Lower the ZOHO_ATTENDANCE_BATCH_SIZE property.");
+    return result;
+  } catch (error) {
+    Logger.log(`FAILED for a single record: ${error.message}`);
+    Logger.log("The record shape or the OAuth scope is wrong, not the batch size. " +
+      "Check that ZOHOPEOPLE.attendance.ALL is on the refresh token.");
+    throw error;
+  }
+}
+
+/**
+ * Diagnostic: one record works but a batch of 50 does not, so something in the
+ * larger set is being rejected. This runs a fixed set of probes that separate
+ * the three candidates — batch size, the `location` value, and mixing
+ * empId with emailId in one array — instead of guessing one per 5-minute
+ * rate-limit window.
+ *
+ * Costs 6 API calls; the endpoint allows 10 per 5-minute lock.
+ */
+function diagnoseZohoAttendancePush() {
+  const syncDate = getZohoAttendanceSyncDate_();
+  const built = buildZohoAttendanceRecordsForDate_(syncDate);
+  if (built.records.length < 50) {
+    Logger.log(`Only ${built.records.length} record(s) for ${syncDate}; probes assume at least 50.`);
+  }
+
+  const first = count => built.records.slice(0, count);
+  const stripLocation = records => records.map(record => {
+    const copy = { checkIn: record.checkIn, checkOut: record.checkOut };
+    if (record.empId) copy.empId = record.empId;
+    if (record.emailId) copy.emailId = record.emailId;
+    return copy;
+  });
+  const empIdOnly = records => records.filter(record => !!record.empId);
+  const singleLocation = records => records.filter(record => record.location === "Bengaluru");
+
+  const probes = [
+    { name: "10 records, as-is", records: first(10) },
+    { name: "25 records, as-is", records: first(25) },
+    { name: "50 records, as-is (known failure)", records: first(50) },
+    { name: "50 records, location field removed", records: stripLocation(first(50)) },
+    { name: "50 records, empId only (no emailId rows)", records: empIdOnly(first(60)).slice(0, 50) },
+    { name: "50 records, Bengaluru only", records: singleLocation(built.records).slice(0, 50) }
+  ];
+
+  const results = [];
+  probes.forEach((probe, index) => {
+    if (index > 0) Utilities.sleep(ZOHO_ATTENDANCE_BATCH_PAUSE_MS);
+    if (probe.records.length === 0) {
+      results.push(`SKIP  ${probe.name} (no records matched)`);
+      return;
+    }
+    try {
+      pushZohoAttendanceBatch_(probe.records);
+      results.push(`PASS  ${probe.name} (${probe.records.length})`);
+    } catch (error) {
+      results.push(`FAIL  ${probe.name} (${probe.records.length})`);
+    }
+  });
+
+  Logger.log("═══ Zoho attendance push diagnosis ═══");
+  results.forEach(line => Logger.log("  " + line));
+  Logger.log(
+    "Reading it: 10/25 pass but 50 fails -> size limit, lower ZOHO_ATTENDANCE_BATCH_SIZE. " +
+    "50 as-is fails but 'location removed' passes -> a Location value is not a valid Zoho site. " +
+    "50 as-is fails but 'empId only' passes -> empId and emailId cannot be mixed in one array. " +
+    "NOTE: probes that PASS have really written check-ins to Zoho for those people."
+  );
+  return results;
+}
+
+/**
+ * Dry run: logs exactly what would be sent for yesterday without calling Zoho.
  */
 function testLogZohoAttendancePayload() {
-  const todayDate = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd");
-  const built = buildZohoAttendanceRecordsForDate_(todayDate);
-  Logger.log(`Zoho attendance dry run for ${todayDate}: ${built.records.length} record(s) would be sent`);
+  const syncDate = getZohoAttendanceSyncDate_();
+  if (!hasMissionHqDateColumn_(syncDate)) {
+    Logger.log(`Zoho attendance dry run: no ${syncDate} column in ${CANDIDATE_SHEET_NAME} — nothing to send.`);
+    return { records: [], skipped: [] };
+  }
+  const built = buildZohoAttendanceRecordsForDate_(syncDate);
+  Logger.log(`Zoho attendance dry run for ${syncDate}: ${built.records.length} record(s) would be sent`);
+  logAttendanceRecordDetails_(built);
   Logger.log(`Payload: ${JSON.stringify(built.records)}`);
   Logger.log(`Skipped (${built.skipped.length}): ${JSON.stringify(built.skipped)}`);
   return built;
+}
+
+/**
+ * Logs who is in the payload, and a tally by status and by identifier, so a run
+ * can be checked against the sheet without reading 237 opaque empIds.
+ */
+function logAttendanceRecordDetails_(built) {
+  const byStatus = {};
+  let byEmpId = 0;
+  let byEmail = 0;
+
+  built.details.forEach(detail => {
+    byStatus[detail.status] = (byStatus[detail.status] || 0) + 1;
+    if (detail.identifiedBy === "empId") byEmpId++;
+    else byEmail++;
+  });
+
+  Logger.log(`Identified by empId: ${byEmpId}, by emailId: ${byEmail}`);
+  Logger.log(`Statuses pushed: ${JSON.stringify(byStatus)}`);
+  Logger.log("Records:");
+  built.details.forEach(detail => Logger.log(`  ${describeAttendanceRecord_(detail)}`));
 }

@@ -144,6 +144,18 @@ function syncEmployeesFromZohoOrgTree() {
   if (newRows.length > 0) {
     sheet.getRange(lastRow + 1, 1, newRows.length, rowWidth).setValues(newRows);
   }
+  SpreadsheetApp.flush(); // so the PMS sync below sees the rows just appended
+
+  // Refresh the PMS Level column off the back of the employee sync, so new hires
+  // and level changes are picked up on the same cadence. Best-effort: a PMS
+  // access failure must not fail the employee sync itself.
+  let pmsLevelSync = null;
+  try {
+    pmsLevelSync = syncPmsLevelsToLog();
+  } catch (pmsError) {
+    Logger.log(`PMS level sync skipped: ${pmsError.message}`);
+    logToDumpSheet(`PMS level sync skipped: ${pmsError.message}`);
+  }
 
   Logger.log(`Employee sync complete. Added ${newRows.length} (Slack IDs resolved: ${slackIdsResolved}); on existing rows filled ${locationsFilled} location(s), updated ${empIdsUpdated} employee id(s), filled ${slackIdsFilled} Slack id(s); skipped ${skipped}.`);
   return {
@@ -152,7 +164,8 @@ function syncEmployeesFromZohoOrgTree() {
     locationsFilled: locationsFilled,
     empIdsUpdated: empIdsUpdated,
     slackIdsFilled: slackIdsFilled,
-    skipped: skipped
+    skipped: skipped,
+    pmsLevelSync: pmsLevelSync
   };
 }
 

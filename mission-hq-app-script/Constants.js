@@ -54,9 +54,20 @@ const ZOHO_PEOPLE_ATTENDANCE_BULK_PATHS = [
 ];
 // Zoho Bulk Import dateFormat for the check-in timestamp.
 const ZOHO_ATTENDANCE_DATETIME_FORMAT = "yyyy-MM-dd HH:mm:ss";
-// Nominal check-in time (HH:mm:ss) used when no ZOHO_ATTENDANCE_CHECKIN_TIME
-// property is set. Phase 1 sends check-in only (no check-out / hours).
+// Records per bulk-import request. Zoho rejects oversized arrays with a generic
+// HTTP 400 / code 7200 "API invocation failed", so the push is chunked.
+// Override with the ZOHO_ATTENDANCE_BATCH_SIZE property.
+const ZOHO_ATTENDANCE_DEFAULT_BATCH_SIZE = 50;
+// Pause between batches — the bulk-import endpoint allows 10 requests per
+// 5-minute lock window.
+const ZOHO_ATTENDANCE_BATCH_PAUSE_MS = 2000;
+// Nominal check-in/check-out times (HH:mm:ss) used when the
+// ZOHO_ATTENDANCE_CHECKIN_TIME / ZOHO_ATTENDANCE_CHECKOUT_TIME properties are
+// not set. BOTH are required: Zoho computes worked hours from the pair, and a
+// check-in with no check-out yields 0 hours, which the muster roll scores as
+// Absent (observed on 2026-08-05 — the import succeeded but every day showed A).
 const ZOHO_ATTENDANCE_DEFAULT_CHECKIN_TIME = "09:30:00";
+const ZOHO_ATTENDANCE_DEFAULT_CHECKOUT_TIME = "18:30:00";
 // Statuses NOT pushed to Zoho (compared lower-cased). Blank cells are already
 // skipped separately; only "Pending" (unanswered prompt) is filtered here.
 const ZOHO_ATTENDANCE_NON_PUSH_STATUSES = ["pending"];
