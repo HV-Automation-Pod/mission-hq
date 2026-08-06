@@ -15,6 +15,7 @@ const ZOHO_ORG_TREE_TOKEN_PROPERTY = "ZOHO_ORG_TREE_TOKEN";
  * sheet. Idempotent: safe to run repeatedly without creating duplicates.
  */
 function syncEmployeesFromZohoOrgTree() {
+  try {
   const employees = fetchZohoOrgTreeEmployees_();
   if (!employees.length) {
     Logger.log("No employees returned from org-tree endpoint.");
@@ -167,6 +168,10 @@ function syncEmployeesFromZohoOrgTree() {
     skipped: skipped,
     pmsLevelSync: pmsLevelSync
   };
+  } catch (e) {
+    sendErrorAlert('Employee sync from Zoho org tree failed: ' + (e && e.message ? e.message : e), { functionName: 'syncEmployeesFromZohoOrgTree' });
+    throw e;
+  }
 }
 
 /**

@@ -128,9 +128,14 @@ const SUMMARY_ORDINALS = [
  * 16th to month end of last month.
  */
 function sendScheduledSummaries() {
-  const period = resolveSummaryPeriod_(new Date());
-  Logger.log(`Scheduled summary run: ${period.label} (${period.start} to ${period.end})`);
-  return runSummariesForPeriod_(period, {});
+  try {
+    const period = resolveSummaryPeriod_(new Date());
+    Logger.log(`Scheduled summary run: ${period.label} (${period.start} to ${period.end})`);
+    return runSummariesForPeriod_(period, {});
+  } catch (e) {
+    sendErrorAlert('Fortnightly attendance summary failed: ' + (e && e.message ? e.message : e), { functionName: 'sendScheduledSummaries' });
+    throw e;
+  }
 }
 
 /** Manual re-send of whatever the scheduled run would post, to the real channels. */

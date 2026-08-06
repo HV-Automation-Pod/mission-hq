@@ -303,13 +303,18 @@ function hasMissionHqDateColumn_(dateString) {
  * went out that day (weekend or holiday).
  */
 function syncYesterdayAttendanceToZoho() {
-  const syncDate = getZohoAttendanceSyncDate_();
-  if (!hasMissionHqDateColumn_(syncDate)) {
-    const message = `No ${syncDate} column in ${CANDIDATE_SHEET_NAME} — weekend, holiday, or no prompts sent.`;
-    Logger.log(`Zoho attendance push skipped: ${message}`);
-    return { success: true, date: syncDate, pushed: 0, skipped: 0, message: message };
+  try {
+    const syncDate = getZohoAttendanceSyncDate_();
+    if (!hasMissionHqDateColumn_(syncDate)) {
+      const message = `No ${syncDate} column in ${CANDIDATE_SHEET_NAME} — weekend, holiday, or no prompts sent.`;
+      Logger.log(`Zoho attendance push skipped: ${message}`);
+      return { success: true, date: syncDate, pushed: 0, skipped: 0, message: message };
+    }
+    return syncAttendanceToZohoForDate(syncDate);
+  } catch (e) {
+    sendErrorAlert('Zoho attendance push failed: ' + (e && e.message ? e.message : e), { functionName: 'syncYesterdayAttendanceToZoho' });
+    throw e;
   }
-  return syncAttendanceToZohoForDate(syncDate);
 }
 
 
