@@ -94,7 +94,7 @@ function buildZohoAttendanceRecordsForDate_(dateString) {
   return { records: records, details: details, skipped: skipped };
 }
 
-/** "row 3 · Divya Prakash · divya.p@hyperverge.co · empId 381 · Office · Bengaluru" */
+/** "row 3 · <Full Name> · <email> · empId <id> · Office · Bengaluru" */
 function describeAttendanceRecord_(detail) {
   if (!detail) return "(no detail)";
   const identifier = detail.empId ? `empId ${detail.empId}` : `emailId ${detail.email}`;
@@ -312,45 +312,6 @@ function syncYesterdayAttendanceToZoho() {
   return syncAttendanceToZohoForDate(syncDate);
 }
 
-/**
- * Diagnostic: sends ONE real record for yesterday and logs Zoho's full reply.
- *
- * Use it to tell the two failure modes apart when a push 400s:
- *   - one record succeeds -> the payload shape is fine, the batch was too big
- *     (lower ZOHO_ATTENDANCE_BATCH_SIZE)
- *   - one record fails    -> the record shape or the scope is wrong, and the
- *     response text here names the reason
- */
-function testPushSingleZohoAttendanceRecord() {
-  const syncDate = getZohoAttendanceSyncDate_();
-  if (!hasMissionHqDateColumn_(syncDate)) {
-    Logger.log(`No ${syncDate} column in ${CANDIDATE_SHEET_NAME} — nothing to send.`);
-    return null;
-  }
-
-  const built = buildZohoAttendanceRecordsForDate_(syncDate);
-  if (built.records.length === 0) {
-    Logger.log(`No pushable records for ${syncDate}.`);
-    return null;
-  }
-
-  const record = built.records[0];
-  Logger.log(`Sending a single record for ${syncDate}`);
-  Logger.log(`  Who:     ${describeAttendanceRecord_(built.details[0])}`);
-  Logger.log(`  Payload: ${JSON.stringify(record)}`);
-  try {
-    const result = pushZohoAttendanceBatch_([record]);
-    Logger.log(`SUCCESS via ${result.url}. Response: ${result.responseText}`);
-    Logger.log("Payload shape is valid — a failing full run is a batch-size problem. " +
-      "Lower the ZOHO_ATTENDANCE_BATCH_SIZE property.");
-    return result;
-  } catch (error) {
-    Logger.log(`FAILED for a single record: ${error.message}`);
-    Logger.log("The record shape or the OAuth scope is wrong, not the batch size. " +
-      "Check that ZOHOPEOPLE.attendance.ALL is on the refresh token.");
-    throw error;
-  }
-}
 
 /**
  * Diagnostic: one record works but a batch of 50 does not, so something in the

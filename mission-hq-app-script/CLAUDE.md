@@ -656,12 +656,11 @@ sits on the rate-limit ceiling.
 syncYesterdayAttendanceToZoho()         // the entry point
 syncAttendanceToZohoForDate(dateString)
 testLogZohoAttendancePayload()          // dry run: logs who + payload, calls nothing
-testPushSingleZohoAttendanceRecord()    // sends ONE record, logs Zoho's reply
 diagnoseZohoAttendancePush()            // 6 probes separating size / location / identifier
 ```
 
 Every push logs each record as
-`row 3 · Divya Prakash · divya.p@hyperverge.co · empId 381 · Office · Bengaluru`
+`row 3 · <Full Name> · <email> · empId <id> · Office · Bengaluru`
 plus a tally by status and by identifier type, so a run can be checked against
 the sheet without decoding bare empIds.
 
