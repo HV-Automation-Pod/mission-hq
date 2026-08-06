@@ -53,11 +53,13 @@ function syncEmployeesFromZohoOrgTree() {
   let locationValues = [];
   let empIdValues = [];
   let slackIdValues = [];
+  let departmentValues = [];
   if (lastRow > 1) {
     const emailValues = sheet.getRange(2, emailColIndex + 1, lastRow - 1, 1).getValues();
     locationValues = sheet.getRange(2, locColIndex + 1, lastRow - 1, 1).getValues();
     empIdValues = sheet.getRange(2, empIdColIndex + 1, lastRow - 1, 1).getValues();
     slackIdValues = sheet.getRange(2, slackIdColIndex + 1, lastRow - 1, 1).getValues();
+    departmentValues = sheet.getRange(2, deptColIndex + 1, lastRow - 1, 1).getValues();
     emailValues.forEach((row, i) => {
       const email = row[0]?.toString().trim().toLowerCase();
       if (email && !(email in existingRowByEmail)) existingRowByEmail[email] = i;
@@ -71,6 +73,7 @@ function syncEmployeesFromZohoOrgTree() {
   let skipped = 0;
   let locationsFilled = 0;
   let empIdsUpdated = 0;
+  let departmentsUpdated = 0;
   let slackIdsFilled = 0;
   let slackIdsResolved = 0;
   employees.forEach(emp => {
@@ -82,9 +85,11 @@ function syncEmployeesFromZohoOrgTree() {
     }
     const zohoLocation = (emp.location || "").toString().trim();
     const empId = (emp.emp_id || "").toString().trim();
+    const zohoDepartment = (emp.department || "").toString().trim();
 
     if (emailKey in existingRowByEmail) {
-      // Existing row: fill Location / Employee ID / Slack ID only when blank.
+      // Existing row: Location / Slack ID are filled only when blank; Employee ID
+      // and Department track Zoho and are overwritten whenever they differ.
       const rowIndex = existingRowByEmail[emailKey];
       let touched = false;
       if (!locationValues[rowIndex][0]?.toString().trim() && zohoLocation) {
@@ -97,6 +102,13 @@ function syncEmployeesFromZohoOrgTree() {
       if (empId && (empIdValues[rowIndex][0]?.toString().trim() || "") !== empId) {
         empIdValues[rowIndex][0] = empId;
         empIdsUpdated++;
+        touched = true;
+      }
+      // Department also tracks Zoho — overwrite when it differs (people move teams).
+      // Only when Zoho has a non-blank value, so a missing API value never clears it.
+      if (zohoDepartment && (departmentValues[rowIndex][0]?.toString().trim() || "") !== zohoDepartment) {
+        departmentValues[rowIndex][0] = zohoDepartment;
+        departmentsUpdated++;
         touched = true;
       }
       if (!slackIdValues[rowIndex][0]?.toString().trim()) {
@@ -140,6 +152,7 @@ function syncEmployeesFromZohoOrgTree() {
   // Write each touched column back in one shot (only blank cells were changed).
   if (locationsFilled > 0) sheet.getRange(2, locColIndex + 1, locationValues.length, 1).setValues(locationValues);
   if (empIdsUpdated > 0) sheet.getRange(2, empIdColIndex + 1, empIdValues.length, 1).setValues(empIdValues);
+  if (departmentsUpdated > 0) sheet.getRange(2, deptColIndex + 1, departmentValues.length, 1).setValues(departmentValues);
   if (slackIdsFilled > 0) sheet.getRange(2, slackIdColIndex + 1, slackIdValues.length, 1).setValues(slackIdValues);
 
   if (newRows.length > 0) {
@@ -158,12 +171,13 @@ function syncEmployeesFromZohoOrgTree() {
     logToDumpSheet(`PMS level sync skipped: ${pmsError.message}`);
   }
 
-  Logger.log(`Employee sync complete. Added ${newRows.length} (Slack IDs resolved: ${slackIdsResolved}); on existing rows filled ${locationsFilled} location(s), updated ${empIdsUpdated} employee id(s), filled ${slackIdsFilled} Slack id(s); skipped ${skipped}.`);
+  Logger.log(`Employee sync complete. Added ${newRows.length} (Slack IDs resolved: ${slackIdsResolved}); on existing rows filled ${locationsFilled} location(s), updated ${empIdsUpdated} employee id(s), updated ${departmentsUpdated} department(s), filled ${slackIdsFilled} Slack id(s); skipped ${skipped}.`);
   return {
     added: newRows.length,
     slackIdsResolved: slackIdsResolved,
     locationsFilled: locationsFilled,
     empIdsUpdated: empIdsUpdated,
+    departmentsUpdated: departmentsUpdated,
     slackIdsFilled: slackIdsFilled,
     skipped: skipped,
     pmsLevelSync: pmsLevelSync
