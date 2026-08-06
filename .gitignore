@@ -1,2 +1,8 @@
 # Supabase CLI local temp state
 **/supabase/.temp/
+
+# Local scratch notes, not for the repo
+TODO.md
+**/TODO.md
+todo.md
+**/todo.md

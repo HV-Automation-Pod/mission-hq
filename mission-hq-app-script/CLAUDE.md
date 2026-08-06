@@ -99,6 +99,7 @@ SlackMessage.js    Slack message block builders and send helpers
 UpdateData.js      Slack payload handling and sheet/profile updates
 ZohoPeople.js      Zoho People OAuth and leave sync
 ZohoAttendance.js  Push MissionHQ attendance into Zoho People (bulk import)
+MonthlySummary.js  Fortnightly per-group attendance summaries to Slack channels
 WebApp.js          doGet API for dashboard and leave sync endpoints
 GetData.js         Sheet/user lookup helpers
 Analytics.js       Analytics helpers
@@ -246,6 +247,215 @@ Keep facts work-appropriate — the prompt DMs the whole org. This mirrors the
 referral bot's motivational-sentence refill alert (`Slack.js` →
 `REFERRAL_ALERT_USER_ID`) in the `hypertalent-platform/ta-scripts/referral` repo.
 
+## Fortnightly Attendance Summaries (`MonthlySummary.js`)
+
+Posts an attendance summary to five group Slack channels on the **1st and the
+15th** of each month. Entirely separate from the daily prompt flow.
+
+### Cadence and periods
+
+Two monthly time-based triggers, both calling `sendScheduledSummaries()`:
+
+```text
+16th -> 1st-15th of the current month     (e.g. "1–15 August 2026")
+1st  -> 16th-month end of last month      (e.g. "16–31 July 2026")
+```
+
+Two **non-overlapping halves**, each fully finished before it is reported.
+Neither period includes the day the run happens on, so the trigger hour does not
+affect the numbers, and deltas always compare a half-month against a half-month.
+
+An earlier design ran on the 1st and 15th with the 1st reporting a whole month.
+That was dropped: the halves overlapped (1–15 was counted twice), the two reports
+covered unequal spans so per-person deltas were meaningless, and a 10 AM run on
+the 15th would have counted that morning's still-`Pending` column against
+everyone.
+
+One handler covers both: `resolveSummaryPeriod_()` picks the half from the run
+date (day >= 16 → `firstHalfPeriod_`, else `secondHalfPeriod_`). Month-end is
+derived as day 0 of the following month, so 28/29/30/31-day months and year
+rollovers are all handled.
+
+Triggers are created by `createSummaryTriggers()` in the throwaway
+`TempCreateTriggers.js` (1st and 16th at ~10 AM), or by hand in the Apps Script
+triggers UI pointing at `sendScheduledSummaries`.
+
+### Posting identity
+
+Posts use the **HV Automation bot**, not the attendance bot —
+`HV_AUTOMATION_BOT_TOKEN` script property. That bot holds
+`chat:write.customize`, so each channel gets its own `username`
+(e.g. `FLG Attendance`). Keep these names period-neutral — the 1st reports a
+month and the 15th reports half a month, so "Fortnightly" or "Monthly" in the
+name is wrong on one of the two runs. The payload deliberately sends **no**
+`icon_url` / `icon_emoji`, so the profile image stays the bot's own everywhere —
+only the display name varies per channel.
+
+### Groups
+
+Defined in `SUMMARY_GROUPS`. Column matchers split the cell on commas, so a
+`Department` of `"Finance, FLG"` belongs to both FLG and G&A.
+
+```text
+FLG          Department contains FLG
+Mumbai       Location = Mumbai
+Coimbatore   Location = Coimbatore
+G&A          Department in {People & Culture, Finance, Legal, Admin}
+Managers     PMS Level matches M1 / M2 / M3 ... (see below)
+```
+
+Matching is normalized (lower-cased, punctuation stripped), so
+`People & Culture` == `people&culture`.
+
+### PMS Level column and the Managers group
+
+The Managers group reads the MissionHQ Log's own **`PMS Level`** column and takes
+every row matching `/^m\d+$/` after normalizing — so `M1`, `M2`, `M12` are in,
+while `IC 2`, `AM`, `NA` and blanks are out.
+
+That column is populated from a **separate spreadsheet** (`PMS_MASTER_SHEET_ID`
+property), tab `Master Sheet`, **headers in row 2**, column **`PMS '26 Level`**.
+Note this is the **Level** column, *not* `PMS '26 Rating` — that one holds
+"Consistently Meets" / "Often Exceeds" text and is only kept as a fallback
+candidate.
+
+The PMS sheet also holds compensation data, so it is read **once**, not on every
+run:
+
+- `syncPmsLevelsToLog()` (menu: **Sync PMS Levels**) reads only the email and
+  level columns — never a whole row — and writes each level into the Log's
+  `PMS Level` column, matched by email. All levels are copied (IC/AM too), not
+  just manager ones.
+- It also runs at the end of `syncEmployeesFromZohoOrgTree()`, so levels refresh
+  on the same cadence as the employee sync and new hires get a level without a
+  separate manual step. That call is best-effort — a PMS failure is logged and
+  does not fail the employee sync.
+- Rows whose email is absent from the PMS sheet are left untouched and counted
+  in the log. A row present in PMS with a blank level is cleared, so a demotion
+  out of M-level leaves no stale value.
+- Scheduled runs read only the local column and never open the PMS sheet.
+- Re-run the sync when levels change. If the column is missing, only the
+  managers channel is skipped — the other four still post.
+
+### Message structure and metrics
+
+Built with **Slack Block Kit** (`buildSnapshotMessage_()` returns
+`{ text, blocks }`; `text` is only the notification fallback). Layout:
+
+```text
+header      GROUP · Attendance Snapshot
+context     period · working days · people · nth snapshot
+section     True WFO Adherence + 10-cell bar + group movement vs last snapshot
+fields      Check-in rate | Pending days | Meeting the standard | Days counted
+section     Stack ranking, one code-block table per tier
+section     Our ask (3 points)
+context     methodology + sign-off, as small print
+```
+
+Two deliberate choices: the ranking tables are **code blocks** because that is
+the only way Slack gives column alignment (emoji do not render inside, hence the
+`▲ ▼ █ ░` text markers), and the methodology sits at the **bottom** as context —
+it is reference material, not the headline, and it used to swamp the top of the
+message.
+
+`chunkRows_()` splits a tier's table when it would exceed a section's 3000-char
+cap, so a large group cannot silently lose members.
+
+Metric definitions — these are the established ones, do not "improve" them
+casually:
+
+```text
+available   = working days − leave days     (leave fully excluded)
+True WFO    = WFO days ÷ available days     (the ranking metric)
+CI rate     = checked-in days ÷ available days
+WFO quality = WFO days ÷ checked-in days
+```
+
+Status buckets (`classifyAttendanceStatus_`, matched normalized):
+
+```text
+WFO      Office, Client Location, Split Day, Travel, Anywhere, Office + Client
+WFH      Home
+LEAVE    Leave                       -> removed from the denominator entirely
+PENDING  "Pending" AND blank cells    -> "pending = invisible"
+```
+
+A **blank cell counts as Pending**, deliberately: a day with no check-in cannot
+be credited as presence. Note the side effect — someone who joined mid-period
+has blanks for the days before they arrived and will score low. Watch for this
+when a new hire's first snapshot looks bad.
+
+Tiers, ranked by True WFO Adherence (CI rate breaks ties):
+
+```text
+S  >=90%   A  80-89%   B  60-79%   C  1-59%   D  0% (check-in not active)
+```
+
+Members with `available == 0` (on leave the whole period) are **not ranked** —
+they are listed in a separate one-line note instead of being dumped into tier D
+as if they had ignored the bot.
+
+### Deltas and snapshot numbering (automatic)
+
+Both used to be pasted in by hand. They are now per-group script properties,
+written **only after a successful real send** — test and dry runs never touch
+them, so previewing does not corrupt the next delta:
+
+```text
+SUMMARY_SCORES_<groupKey>     JSON { name: trueAdherence } from the last send
+SUMMARY_SNAPSHOT_<groupKey>   integer, renders as "our fifth attendance snapshot"
+```
+
+A delta of ±10pp or more is bolded; ±15pp or more also gets an arrow. Members
+are keyed by **Full Name**, so a renamed row loses its delta for one cycle.
+
+### AI narrative (not wired up)
+
+The manual version optionally passed the message through Claude for headline
+insight and inline commentary on big movers. That is deliberately **not**
+included — the template output is deterministic and reviewable. To add it later,
+post-process the blocks from `buildSnapshotMessage_()` before
+`postSummaryToSlack_()`.
+
+### Auditing
+
+`logDetailedAudit(groupKey)` (menu: **Audit Last Month**) logs every member's
+day-by-day status and classification, plus the arithmetic behind their
+percentages. Use it when someone challenges their numbers. Omit `groupKey` for
+all groups.
+
+### Functions
+
+```text
+sendScheduledSummaries()      // trigger handler, both days
+sendScheduledSummariesNow()   // manual re-send of the current period, real channels
+previewScheduledSummaries()   // logs only, posts nothing, writes no state
+testFirstHalfSummaries()      // the 16th run (1st-15th), to the test channel, any day
+testSecondHalfSummaries()     // the 1st run (16th-month end), to the test channel
+logDetailedAudit(groupKey)    // day-by-day breakdown, logs only
+syncPmsLevelsToLog()          // fills the Log's PMS Level column
+```
+
+The two test functions exist because each half is otherwise only reproducible on
+its own trigger day. They post every group to `TEST_SUMMARY_CHANNEL_ID`, prefix
+each message with the channel it *would* have gone to, and **write no state**, so
+scores and snapshot numbers stay clean no matter how often they run.
+
+Run `testFirstHalfSummaries()` before the 16th and it only has the date columns
+that exist so far — the layout is right but the percentages are partial.
+
+### Required script properties
+
+```text
+HV_AUTOMATION_BOT_TOKEN    HV Automation bot (chat:write + chat:write.customize)
+TEST_SUMMARY_CHANNEL_ID    channel the test functions post to
+PMS_MASTER_SHEET_ID        spreadsheet id of the PMS master sheet
+```
+
+These were set once via a throwaway `SetupSecrets.js` (gitignored, shipped
+blank, validated the token against `auth.test`, then deleted). To change one,
+edit it directly in Apps Script **Project Settings → Script Properties**.
+
 ## Location Dropdown
 
 The Google Sheet `Locations` tab should include:
@@ -384,9 +594,17 @@ Each present employee becomes a check-in object, identified by `emailId` (or
 - Bulk Import rate limit: 10 requests / 5-min lock. One call per day stays well
   under it. (The single check-in/check-out API is avoided because its 5-min lock
   is per-request and would not scale across the org.)
-- Phase 1 sends **check-in only** (no check-out / hours). Check-in time is a
-  nominal placeholder; override with the `ZOHO_ATTENDANCE_CHECKIN_TIME` property
-  (`HH:mm:ss`, default `09:30:00`).
+- Each record sends **both check-in and check-out** (nominal `09:30:00` and
+  `18:30:00`; override with `ZOHO_ATTENDANCE_CHECKIN_TIME` /
+  `ZOHO_ATTENDANCE_CHECKOUT_TIME`). These are placeholders, not real hours.
+
+  **Check-out is not optional.** The first version sent check-in only. Zoho
+  accepted it — `{"response":"success"}` for all 237 records — but derives
+  worked hours from the check-in/check-out pair, so every day landed at 0 hours
+  and the **Muster roll showed `A` (Absent)** for people who were in the office,
+  with `Worked Days (Present + On Duty)` = 0 across the board. An API success on
+  this endpoint does not mean the day counts as present; verify in
+  `Attendance → Organization Reports → Muster roll`, not just in the logs.
 
 ### Who gets pushed
 
@@ -400,17 +618,58 @@ not a work mode like Home/Office. It is read from the MissionHQ Log's own
 `Location` column (per-employee site). If that column is absent/blank, `location`
 is omitted (it is optional in Zoho).
 
+### Pushes YESTERDAY, not today
+
+`syncYesterdayAttendanceToZoho()` is the entry point. Today's data is
+half-finished when any sensible trigger would run — most rows are still
+`Pending` — so the push targets the previous day. A missing date column
+(weekend, holiday, no prompts) is a normal no-op, not an error.
+
+### empId is required; emailId does not work
+
+Records identify the employee by `empId` when the Log's Employee ID cell is
+filled, and fall back to `emailId` when it is blank. **The emailId fallback is
+rejected by Zoho.** Any array containing an emailId record 400s with a generic
+code 7200 "API invocation failed" that names no field — so a single bad record
+takes down every record batched with it.
+
+Established by probe on 2026-08-05: 50 mixed records failed; the same 50 minus
+the one emailId row passed; that row then failed alone in a batch of one. Batch
+size was never the issue (50 empId records pass fine).
+
+So `pushZohoAttendanceBulkImport_()` **groups records by identifier type** and
+sends each group separately. An empId batch failure stops the run; an emailId
+failure is logged with the affected people and the run continues. The real fix
+for those rows is filling their Employee ID — run **Sync Employees from Zoho**,
+and if that does not populate it, the employee has no `emp_id` in Zoho.
+
+### Batching
+
+Records go in batches of `ZOHO_ATTENDANCE_BATCH_SIZE` (default 50) with a 2s
+pause, staying inside the 10-requests-per-5-minute lock. Do not drop the batch
+size below 25 — a full org day needs ~5 requests at 50, and 10 at 25 already
+sits on the rate-limit ceiling.
+
 ### Functions
 
 ```text
-syncTodayAttendanceToZoho()
+syncYesterdayAttendanceToZoho()         // the entry point
 syncAttendanceToZohoForDate(dateString)
-testLogZohoAttendancePayload()   // dry run: logs payload, calls nothing
+testLogZohoAttendancePayload()          // dry run: logs who + payload, calls nothing
+diagnoseZohoAttendancePush()            // 6 probes separating size / location / identifier
 ```
 
+Every push logs each record as
+`row 3 · <Full Name> · <email> · empId <id> · Office · Bengaluru`
+plus a tally by status and by identifier type, so a run can be checked against
+the sheet without decoding bare empIds.
+
+Note that `diagnoseZohoAttendancePush()` **really writes** check-ins for the
+probes that pass — it is not a dry run.
+
 Run manually from the **MissionHQ** spreadsheet menu first
-(`Preview Attendance Push` then `Push Attendance to Zoho`); attach to a daily
-end-of-day trigger once validated. Not wired into the prompt/reminder flow.
+(`Preview Attendance Push` then `Push Attendance to Zoho (Yesterday)`); attach to
+a daily morning trigger once validated. Not wired into the prompt/reminder flow.
 
 ## Apps Script Deployment
 
