@@ -72,6 +72,13 @@ const SUMMARY_GROUPS = [
     match: { type: "column", column: "Location", values: ["Coimbatore"] }
   },
   {
+    key: "bengaluru",
+    title: "Bengaluru",
+    channelId: "C08K2HXPCRG",
+    botName: "Bengaluru Attendance Summary",
+    match: { type: "column", column: "Location", values: ["Bengaluru"] }
+  },
+  {
     key: "gna",
     title: "G&A",
     channelId: "C0331D6JE2D",
@@ -1044,4 +1051,3 @@ function postSummaryToSlack_(channelId, botName, message) {
     return { success: false, message: `Error posting summary: ${error.message}` };
   }
 }
-
