@@ -51,6 +51,13 @@ const PMS_LEVEL_COLUMN = "PMS Level";
 // "Finance, FLG" belongs to both the FLG group and the G&A group.
 const SUMMARY_GROUPS = [
   {
+    key: "coimbatore",
+    title: "Coimbatore",
+    channelId: "C046Y1LKZLG",
+    botName: "Coimbatore Attendance Summary",
+    match: { type: "column", column: "Location", values: ["Coimbatore"] }
+  },
+  {
     key: "flg",
     title: "FLG",
     channelId: "C07R3JUEL86",
@@ -63,13 +70,6 @@ const SUMMARY_GROUPS = [
     channelId: "C07CGSQF42U",
     botName: "Mumbai Attendance Summary",
     match: { type: "column", column: "Location", values: ["Mumbai"] }
-  },
-  {
-    key: "coimbatore",
-    title: "Coimbatore",
-    channelId: "C046Y1LKZLG",
-    botName: "Coimbatore Attendance Summary",
-    match: { type: "column", column: "Location", values: ["Coimbatore"] }
   },
   {
     key: "bengaluru",
@@ -100,9 +100,19 @@ const SUMMARY_GROUPS = [
 
 // --- Metric definitions ------------------------------------------------------
 // Matched after normalizing, so "Office + Client" == "office+client".
-const WFO_STATUSES = ["Office", "Client Location", "Split Day", "Travel", "Anywhere", "Office + Client"];
-const WFH_STATUSES = ["Home"];
+// Classification per People & Culture spec (Vani, 2026-08-10).
+// WFA ("Anywhere") is tracked SEPARATELY from WFO/WFH — it is a capped annual
+// entitlement (10 days/year), so it neither helps nor hurts office adherence.
+const WFO_STATUSES = [
+  "Office", "Client", "Client Location", "Split Day", "Travel",
+  "Office + Client", "Compensatory WFH", "Half Day Office Leave"
+];
+const WFH_STATUSES = ["Home", "Half Day WFH Leave"];
+const WFA_STATUSES = ["Anywhere"];
 const LEAVE_STATUSES = ["Leave"];
+
+// Each employee is entitled to at most this many WFA days per calendar year.
+const WFA_ANNUAL_CAP = 10;
 // Everything else — including a blank cell — counts as Pending: a day that
 // cannot be credited as presence.
 
@@ -187,8 +197,8 @@ function logDetailedAudit(groupKey) {
     Logger.log(`\n═══ ${group.title} — ${period.label} (${snapshot.dateColumns.length} working days) ═══`);
     results.forEach(member => {
       Logger.log(`\n${member.name}`);
-      Logger.log(`  WFO=${member.wfo} WFH=${member.wfh} Leave=${member.leave} Pending=${member.pending}`);
-      Logger.log(`  Available=${member.available} (${snapshot.dateColumns.length} - ${member.leave} leave)`);
+      Logger.log(`  WFO=${member.wfo} WFH=${member.wfh} WFA=${member.wfa} (YTD ${member.wfaYtd}/${WFA_ANNUAL_CAP}, ${member.wfaOverCap} over-cap this period) Leave=${member.leave} Pending=${member.pending}`);
+      Logger.log(`  Available=${member.available} (${snapshot.dateColumns.length} - ${member.leave} leave - ${member.wfa} WFA)`);
       Logger.log(`  True Adherence: ${member.wfo}/${member.available} = ${member.trueAdh}%`);
       Logger.log(`  CI Rate: ${member.checkedIn}/${member.available} = ${member.ciRate}%`);
       member.days.forEach(day => Logger.log(`    ${day.date}: ${day.raw || "(blank)"} → ${day.category}`));
@@ -246,7 +256,7 @@ function runSummariesForPeriod_(period, options) {
       const fullPeriodLeave = memberMetrics.filter(member => member.available === 0);
 
       if (ranked.length === 0) {
-        const reason = "every member was on leave for the whole period";
+        const reason = "every member had no scored days (all leave/WFA) for the period";
         Logger.log(`Skipping ${group.title}: ${reason}`);
         results.push({ group: group.key, sent: false, message: reason });
         return;
@@ -382,6 +392,17 @@ function readMissionHqSnapshot_(startDate, endDate) {
   });
   dateColumns.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
 
+  // Every date column in the period's calendar year up to and including its end,
+  // used only to count year-to-date WFA against the annual cap.
+  const yearPrefix = endDate.slice(0, 4); // "2026"
+  const ytdDateColumns = [];
+  headers.forEach((header, index) => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(header)) return;
+    if (header.slice(0, 4) === yearPrefix && header <= endDate) {
+      ytdDateColumns.push({ date: header, index: index });
+    }
+  });
+
   return {
     headers: headers,
     rows: data.slice(1),
@@ -389,7 +410,8 @@ function readMissionHqSnapshot_(startDate, endDate) {
     nameColIndex: nameColIndex,
     departmentColIndex: headers.indexOf("Department"),
     locationColIndex: headers.indexOf("Location"),
-    dateColumns: dateColumns
+    dateColumns: dateColumns,
+    ytdDateColumns: ytdDateColumns
   };
 }
 
@@ -444,10 +466,17 @@ function normalizeSummaryKey_(value) {
 /**
  * One row per member, ranked by True WFO Adherence (CI rate breaks ties).
  *
- *   available   = working days − leave days   (leave fully excluded)
- *   True WFO    = WFO days ÷ available days   (the ranking metric)
- *   WFO quality = WFO days ÷ checked-in days
+ *   available   = working days − leave − WFA-within-entitlement
+ *   True WFO    = WFO days ÷ available days              (the ranking metric)
  *   CI rate     = checked-in days ÷ available days
+ *
+ * WFA (Work From Anywhere) is excluded from the denominator ONLY up to the
+ * 10-day annual entitlement. A person's first 10 WFA days of the year are
+ * neutral, like leave. Every WFA day beyond the 10th is over-entitlement: it
+ * stays in the denominator and is NOT counted as office, so it drags adherence
+ * down — which is the point, since that person is over their cap. Whether a
+ * period's WFA days are within the allowance is decided by how many WFA days the
+ * person already used earlier in the year (priorWfa).
  *
  * A blank cell counts as Pending, matching "pending = invisible": a day with no
  * check-in cannot be credited as presence.
@@ -462,6 +491,7 @@ function computeMemberMetrics_(members, snapshot, groupKey, period) {
 
     let wfo = 0;
     let wfh = 0;
+    let wfa = 0;
     let leave = 0;
     let pending = 0;
     const days = [];
@@ -472,13 +502,33 @@ function computeMemberMetrics_(members, snapshot, groupKey, period) {
       days.push({ date: column.date, raw: raw, category: category });
       if (category === "WFO") wfo++;
       else if (category === "WFH") wfh++;
+      else if (category === "WFA") wfa++;
       else if (category === "LEAVE") leave++;
       else pending++;
     });
 
+    // Year-to-date WFA for this row, across every date column in the year up to
+    // the period end — this is the running total the 10-day cap applies to.
+    let wfaYtd = 0;
+    (snapshot.ytdDateColumns || []).forEach(column => {
+      const raw = row[column.index] ? row[column.index].toString().trim() : "";
+      if (classifyAttendanceStatus_(raw) === "WFA") wfaYtd++;
+    });
+
     const totalDays = snapshot.dateColumns.length;
-    const available = totalDays - leave;
-    const checkedIn = wfo + wfh;
+
+    // Split this period's WFA into "within entitlement" and "over cap". The
+    // person's WFA days earlier in the year (priorWfa) consume the allowance
+    // first, so a heavy user has none left by the time this period runs.
+    const priorWfa = Math.max(0, wfaYtd - wfa);
+    const allowanceLeft = Math.max(0, WFA_ANNUAL_CAP - priorWfa);
+    const wfaWithin = Math.min(wfa, allowanceLeft); // neutral, excluded like leave
+    const wfaOverCap = wfa - wfaWithin;             // counts in the denominator, not office
+
+    // Only within-entitlement WFA is excused from the denominator. Over-cap WFA
+    // stays in, and is a check-in (they did respond) but not office.
+    const available = totalDays - leave - wfaWithin;
+    const checkedIn = wfo + wfh + wfaOverCap;
     const trueAdh = available > 0 ? Math.round((wfo / available) * 100) : 0;
     const ciRate = available > 0 ? Math.round((checkedIn / available) * 100) : 0;
     const wfoQuality = checkedIn > 0 ? Math.round((wfo / checkedIn) * 100) : null;
@@ -490,6 +540,9 @@ function computeMemberMetrics_(members, snapshot, groupKey, period) {
       name: name,
       wfo: wfo,
       wfh: wfh,
+      wfa: wfa,
+      wfaYtd: wfaYtd,
+      wfaOverCap: wfaOverCap,
       leave: leave,
       pending: pending,
       available: available,
@@ -511,9 +564,11 @@ function classifyAttendanceStatus_(raw) {
   const normalized = normalizeSummaryKey_(raw);
   if (normalized === "pending") return "PENDING";
   if (WFO_STATUSES.some(status => normalizeSummaryKey_(status) === normalized)) return "WFO";
+  if (WFA_STATUSES.some(status => normalizeSummaryKey_(status) === normalized)) return "WFA";
   if (LEAVE_STATUSES.some(status => normalizeSummaryKey_(status) === normalized)) return "LEAVE";
   if (WFH_STATUSES.some(status => normalizeSummaryKey_(status) === normalized)) return "WFH";
-  // Unrecognised wording that still clearly means presence, e.g. "Office (AM)".
+  // Unrecognised wording that still clearly means office presence, e.g.
+  // "Office (AM)". WFA is deliberately excluded from this fallback.
   if (normalized.indexOf("office") !== -1 || normalized.indexOf("client") !== -1) return "WFO";
   return "PENDING";
 }
@@ -659,6 +714,7 @@ function buildSnapshotMessage_(group, ranked, tiers, fullPeriodLeave, snapshot, 
   const totalAvailable = sumBy_(ranked, member => member.available);
   const totalCheckedIn = sumBy_(ranked, member => member.checkedIn);
   const totalPending = sumBy_(ranked, member => member.pending);
+  const totalWfa = sumBy_(ranked, member => member.wfa);
   const totalSlots = totalMembers * workingDays;
 
   const orgTrueAdh = totalAvailable > 0 ? Math.round((totalWfo / totalAvailable) * 100) : 0;
@@ -700,7 +756,8 @@ function buildSnapshotMessage_(group, ranked, tiers, fullPeriodLeave, snapshot, 
       { type: "mrkdwn", text: `*Check-in rate*\n${orgCi}%` },
       { type: "mrkdwn", text: `*Pending days*\n${orgPendingPct}%` },
       { type: "mrkdwn", text: `*Meeting the 4-day standard*\n${at80Plus} of ${totalMembers} (80%+)` },
-      { type: "mrkdwn", text: `*Days counted*\n${totalWfo} WFO of ${totalAvailable} available` }
+      { type: "mrkdwn", text: `*Days counted*\n${totalWfo} WFO of ${totalAvailable} available` },
+      { type: "mrkdwn", text: `*WFA days*\n${totalWfa} (tracked separately)` }
     ]
   });
 
@@ -740,10 +797,16 @@ function buildSnapshotMessage_(group, ranked, tiers, fullPeriodLeave, snapshot, 
       type: "context",
       elements: [{
         type: "mrkdwn",
-        text: `_Not ranked — on leave for the full period: ${fullPeriodLeave.map(m => m.name).join(", ")}._`
+        text: `_Not ranked — leave/WFA for the full period: ${fullPeriodLeave.map(m => m.name).join(", ")}._`
       }]
     });
   }
+
+  // --- WFA annual cap ------------------------------------------------------
+  // Scanned across everyone in the group, not just the ranked members, so a
+  // person who was all-WFA this period is still flagged.
+  const capWarning = wfaCapWarningBlock_(ranked.concat(fullPeriodLeave));
+  if (capWarning) blocks.push(capWarning);
 
   // --- The ask ------------------------------------------------------------
   blocks.push({ type: "divider" });
@@ -780,11 +843,12 @@ function buildSnapshotMessage_(group, ranked, tiers, fullPeriodLeave, snapshot, 
     elements: [{
       type: "mrkdwn",
       text:
-        `*How this is calculated*  ·  *Available days* = ${workingDays} working days − leave days; ` +
-        "leave is fully excluded, counting neither for nor against you  ·  " +
+        `*How this is calculated*  ·  *Available days* = ${workingDays} working days − leave − WFA; ` +
+        "leave and WFA (up to the 10-day yearly entitlement) are excluded, counting " +
+        "neither for nor against you. WFA days beyond 10/year DO count against adherence  ·  " +
         "*True WFO Adherence* = WFO days ÷ available days  ·  " +
-        "*WFO* = Office, Client Location, Split Day, Travel, Anywhere (WFA)  ·  " +
-        `e.g. 2 leave days means you are scored on ${workingDays - 2} days, not ${workingDays}.`
+        "*WFO* = Office, Client, Client Location, Split Day, Travel, Office + Client, " +
+        "Compensatory WFH, Half Day Office Leave  ·  *WFH* = Home, Half Day WFH Leave."
     }]
   });
   blocks.push({
@@ -862,6 +926,39 @@ function orgDelta_(ranked) {
 
 function sumBy_(items, selector) {
   return items.reduce((total, item) => total + selector(item), 0);
+}
+
+/**
+ * A context block naming anyone at or over the annual WFA cap, plus anyone one
+ * or two days away, so managers can act before the limit is breached. Returns
+ * null when nobody is close. `member.wfaYtd` is the running year-to-date count.
+ */
+function wfaCapWarningBlock_(members) {
+  const atOrOver = members
+    .filter(member => (member.wfaYtd || 0) >= WFA_ANNUAL_CAP)
+    .sort((a, b) => b.wfaYtd - a.wfaYtd);
+  const approaching = members
+    .filter(member => {
+      const used = member.wfaYtd || 0;
+      return used >= WFA_ANNUAL_CAP - 2 && used < WFA_ANNUAL_CAP;
+    })
+    .sort((a, b) => b.wfaYtd - a.wfaYtd);
+
+  if (atOrOver.length === 0 && approaching.length === 0) return null;
+
+  const parts = [];
+  if (atOrOver.length > 0) {
+    parts.push(
+      `:warning:  *WFA annual cap (${WFA_ANNUAL_CAP}/yr) reached:* ` +
+      atOrOver.map(m => `${m.name} (${m.wfaYtd})`).join(", ")
+    );
+  }
+  if (approaching.length > 0) {
+    parts.push(
+      `_Approaching the cap: ${approaching.map(m => `${m.name} (${m.wfaYtd})`).join(", ")}._`
+    );
+  }
+  return { type: "context", elements: [{ type: "mrkdwn", text: parts.join("\n") }] };
 }
 
 /** Flattens blocks into readable text for dry-run logging. */

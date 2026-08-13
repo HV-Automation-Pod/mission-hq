@@ -319,11 +319,20 @@ function getZohoPeopleLeaveIdentitiesForDate(dateString) {
     identities.push({
       empId: extractZohoLeaveEmpId_(record),
       name: normalizeLeaveName_(rawName),
-      rawName: rawName
+      rawName: rawName,
+      toDate: extractZohoLeaveToDate_(record) // last day of this leave, for the Slack status expiry
     });
   });
 
   return identities;
+}
+
+/** yyyy-MM-dd of a leave's last day (falls back to the start day for single-day leaves). */
+function extractZohoLeaveToDate_(record) {
+  // Zoho People returns plain "From"/"To" (confirmed against live records).
+  const fromDate = parseZohoPeopleDate_(getNestedZohoValue_(record, ["From"]));
+  const toDate = parseZohoPeopleDate_(getNestedZohoValue_(record, ["To"])) || fromDate;
+  return toDate ? formatZohoPeopleDate_(toDate) : "";
 }
 
 function parseZohoPeopleDate_(value) {
@@ -384,22 +393,9 @@ function isZohoLeaveApproved_(record) {
 }
 
 function isZohoLeaveOnDate_(record, dateString) {
-  const fromValue = getNestedZohoValue_(record, [
-    "From",
-    "FromDate",
-    "From_Date",
-    "StartDate",
-    "Start_Date",
-    "Date"
-  ]);
-  const toValue = getNestedZohoValue_(record, [
-    "To",
-    "ToDate",
-    "To_Date",
-    "EndDate",
-    "End_Date",
-    "Date"
-  ]);
+  // Zoho People returns plain "From"/"To" (confirmed against live records).
+  const fromValue = getNestedZohoValue_(record, ["From"]);
+  const toValue = getNestedZohoValue_(record, ["To"]);
 
   const fromDate = parseZohoPeopleDate_(fromValue);
   const toDate = parseZohoPeopleDate_(toValue) || fromDate;
@@ -433,22 +429,8 @@ function getZohoPeopleLeaveRecordsForDateAndStatuses_(dateString, statuses) {
         "Name",
         "employeeName"
       ]),
-      from: getNestedZohoValue_(record, [
-        "From",
-        "FromDate",
-        "From_Date",
-        "StartDate",
-        "Start_Date",
-        "Date"
-      ]),
-      to: getNestedZohoValue_(record, [
-        "To",
-        "ToDate",
-        "To_Date",
-        "EndDate",
-        "End_Date",
-        "Date"
-      ]),
+      from: getNestedZohoValue_(record, ["From"]),
+      to: getNestedZohoValue_(record, ["To"]),
       status: getNestedZohoValue_(record, [
         "ApprovalStatus",
         "Approval_Status",
@@ -486,6 +468,7 @@ function buildSheetEmployeeLookups_(data, headers) {
   const nameColIndex = headers.indexOf("Full Name");
   const emailColIndex = headers.indexOf("Email Address");
   const empIdColIndex = findColumnIndexByCandidates_(headers, ZOHO_ATTENDANCE_EMPID_COLUMNS);
+  const slackIdColIndex = headers.indexOf(SLACK_USER_ID_COLUMN);
 
   const byEmpId = {};
   const byName = {};
@@ -495,7 +478,8 @@ function buildSheetEmployeeLookups_(data, headers) {
       row: i + 1,
       name: name,
       email: emailColIndex === -1 ? "" : (data[i][emailColIndex] || "").toString().trim().toLowerCase(),
-      empId: empIdColIndex === -1 ? "" : normalizeEmpId_(data[i][empIdColIndex])
+      empId: empIdColIndex === -1 ? "" : normalizeEmpId_(data[i][empIdColIndex]),
+      slackId: slackIdColIndex === -1 ? "" : (data[i][slackIdColIndex] || "").toString().trim()
     };
     if (entry.empId && !byEmpId[entry.empId]) byEmpId[entry.empId] = entry;
     const nameKey = normalizeLeaveName_(name);
@@ -571,6 +555,7 @@ function syncZohoPeopleLeavesForDate(dateString) {
   const markedLeaves = [];
   const skippedLeaves = [];
   const unmatchedLeaves = [];
+  const slackStatusSet = [];
   const processedRows = {};
 
   identities.forEach(identity => {
@@ -593,9 +578,25 @@ function syncZohoPeopleLeavesForDate(dateString) {
       updated++;
       markedLeaves.push({ row: entry.row, name: entry.name, email: entry.email, matchBy: matchBy });
     }
+
+    // Best-effort Slack "On leave" status, expiring at the leave's end. Attempted
+    // each day of the leave, but the helper only writes when the status is empty,
+    // so a multi-day leave is stamped once (day two onward sees it already set
+    // and skips) and never overwrites a status the employee chose.
+    if (entry.slackId) {
+      const result = setSlackLeaveStatusIfEmpty_(entry.slackId, identity.toDate || dateString);
+      if (result.set) {
+        slackStatusSet.push({ name: entry.name, until: identity.toDate || dateString });
+      } else if (result.reason && result.reason.indexOf("existing status") === -1) {
+        Logger.log(`Slack leave status not set for ${entry.name}: ${result.reason}`);
+      }
+    }
   });
 
   if (updated > 0) SpreadsheetApp.flush();
+  if (slackStatusSet.length > 0) {
+    Logger.log(`Slack "On leave" status set for ${dateString}: ${JSON.stringify(slackStatusSet)}`);
+  }
   Logger.log(`Zoho People users marked Leave for ${dateString}: ${JSON.stringify(markedLeaves)}`);
   if (skippedLeaves.length > 0) {
     Logger.log(`Zoho People leave matches skipped for ${dateString}: ${JSON.stringify(skippedLeaves)}`);
@@ -613,6 +614,7 @@ function syncZohoPeopleLeavesForDate(dateString) {
     markedLeaves: markedLeaves,
     skippedLeaves: skippedLeaves,
     unmatchedLeaves: unmatchedLeaves,
+    slackStatusSet: slackStatusSet,
     updated: updated
   };
 }
@@ -620,4 +622,75 @@ function syncZohoPeopleLeavesForDate(dateString) {
 function syncTodayZohoPeopleLeaves() {
   const todayDate = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd");
   return syncZohoPeopleLeavesForDate(todayDate);
+}
+
+// ---------------------------------------------------------------------------
+// Slack "On leave" status for approved Zoho leaves
+//
+// Set ONCE, on the first day of a leave, with an expiry at the leave's end, so
+// Slack clears it automatically. A multi-day leave is not re-stamped daily: the
+// later days see a status already present and skip. We never overwrite a status
+// the employee (or anything else) set — only a genuinely empty one.
+//
+// Setting another member's profile needs an admin user token; SLACK_USER_TOKEN
+// is used. The whole thing is best-effort: a Slack failure is logged and never
+// breaks the sheet leave sync.
+// ---------------------------------------------------------------------------
+
+const LEAVE_SLACK_STATUS_TEXT = "On leave";
+const LEAVE_SLACK_STATUS_EMOJI = ":palm_tree:";
+
+/** Unix seconds at the start of the day AFTER the leave ends — when Slack clears it. */
+function leaveStatusExpirationEpoch_(toDateString) {
+  const to = parseZohoPeopleDate_(toDateString);
+  if (!to) return 0; // 0 = no expiry; better than a wrong date
+  const next = new Date(to.getFullYear(), to.getMonth(), to.getDate() + 1, 0, 0, 0);
+  return Math.floor(next.getTime() / 1000);
+}
+
+/**
+ * Sets the "On leave" status for a user, but only if their status is currently
+ * empty. Returns a small result object; never throws.
+ */
+function setSlackLeaveStatusIfEmpty_(userId, toDateString) {
+  if (!userId) return { set: false, reason: "no slack id" };
+
+  try {
+    const getResp = UrlFetchApp.fetch(
+      `https://slack.com/api/users.profile.get?user=${encodeURIComponent(userId)}`,
+      { method: "get", headers: { Authorization: `Bearer ${SLACK_USER_TOKEN}` }, muteHttpExceptions: true }
+    );
+    const getJson = JSON.parse(getResp.getContentText());
+    if (!getJson.ok) return { set: false, reason: `profile.get: ${getJson.error}` };
+
+    // Treat either a set text or a set emoji as "has a status", matching the
+    // edge function — do not overwrite anything the employee already chose.
+    const profile = getJson.profile || {};
+    const existingText = profile.status_text ? profile.status_text.toString().trim() : "";
+    const existingEmoji = profile.status_emoji ? profile.status_emoji.toString().trim() : "";
+    if (existingText || existingEmoji) {
+      return { set: false, reason: `existing status "${existingText || existingEmoji}"` };
+    }
+
+    const payload = {
+      user: userId,
+      profile: {
+        status_text: LEAVE_SLACK_STATUS_TEXT,
+        status_emoji: LEAVE_SLACK_STATUS_EMOJI,
+        status_expiration: leaveStatusExpirationEpoch_(toDateString)
+      }
+    };
+    const setResp = UrlFetchApp.fetch("https://slack.com/api/users.profile.set", {
+      method: "post",
+      contentType: "application/json; charset=utf-8",
+      headers: { Authorization: `Bearer ${SLACK_USER_TOKEN}` },
+      payload: JSON.stringify(payload),
+      muteHttpExceptions: true
+    });
+    const setJson = JSON.parse(setResp.getContentText());
+    if (!setJson.ok) return { set: false, reason: `profile.set: ${setJson.error}` };
+    return { set: true, expiresAfter: toDateString };
+  } catch (error) {
+    return { set: false, reason: `error: ${error.message}` };
+  }
 }
