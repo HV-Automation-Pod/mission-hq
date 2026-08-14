@@ -640,8 +640,8 @@ ignoring anyone whose 48h/30d/90d window has already passed.
 ### Formatting (`formatPofuSheet_`)
 
 Runs at the end of every sync, wrapped in try/catch — the roster matters, the
-paint job does not. Idempotent: banding and conditional rules are **replaced**,
-not stacked, so a year of daily runs leaves exactly one of each.
+paint job does not. Idempotent: banding is **replaced**, not stacked, so a year
+of daily runs leaves exactly one of it.
 
 ```text
 header      dark slate, white bold, frozen, 34px
@@ -651,20 +651,11 @@ Employee ID number format "@" — stops "551" and "INT390" aligning differently
 filter      basic filter, created once and left alone unless the data outgrows it
 ```
 
-The colour rules encode the "don't message the whole company" risk directly, per
-message column:
-
-```text
-green   message logged
-amber   due and still blank             -> the only cells that mean act now
-grey    joined > POFU_ACTIONABLE_WINDOW_DAYS (180) ago -> out of scope
-blank   not due yet
-```
-
-Without the grey rule every long-tenured employee would show as overdue on all
-three columns. Two more rules sit on the joining date: **blue** for a future
-start date, **red** for a blank one (that row's triggers can never fire). The
-legend is a note on each message header. Theme colours live in `POFU_THEME`.
+**Layout only — no conditional formatting.** An earlier version painted the
+message columns green/amber/grey by due date and added a legend note to each
+header; it was removed as noise. Do not add it back without being asked. The
+sheet's own conditional rules belong to whoever set them and are never read,
+written or cleared here.
 
 The joining date is stored as a **real Date** (`parsePofuDate_`), number format
 `yyyy-mm-dd`, so it sorts chronologically and the conditional formulas can do

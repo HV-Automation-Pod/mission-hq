@@ -1,28 +1,6 @@
-function isWeekend() {
-  const today = new Date();
-  const dayOfWeek = today.getDay(); // 0 = Sunday, 6 = Saturday
-  const isWeekendDay = dayOfWeek === 0 || dayOfWeek === 6;
-
-  console.log(`Today is ${isWeekendDay ? '' : 'not '}a weekend day.`);
-  return isWeekendDay;
-}
-
-function isHoliday() {
-  // List of holidays in "MM/DD" format
-  const holidays = ["01/01", "01/15", "01/26", "03/04", "03/20", "03/31", "04/03", "05/01", "08/15", "10/02", "11/01", "11/09", "11/10", "12/25"];
-  let checkDate;
-  // If no date provided, use today
-  const today = new Date();
-  const month = String(today.getMonth() + 1).padStart(2, '0'); // Months are 0-indexed
-  const day = String(today.getDate()).padStart(2, '0');
-  checkDate = `${month}/${day}`;
-
-  const isHolidayToday = holidays.includes(checkDate);
-
-  console.log(`Today (${checkDate}) is ${isHolidayToday ? '' : 'not '}a holiday.`);
-
-  return isHolidayToday;
-}
+// isWeekend() / isHoliday() used to live here. They now live in WorkCalendar.js,
+// which is also what the other automations reach through the MissionHQ library —
+// one holiday list for the whole org. The call sites below are unchanged.
 
 function fallbackProcessEmailsAndSendSlackMessage () {
   processEmailsAndSendSlackMessage()
