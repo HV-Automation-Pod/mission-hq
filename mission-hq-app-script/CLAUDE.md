@@ -593,9 +593,27 @@ instead of each automation keeping a copy:
 `hvHolidays_()` and bump `HV_HOLIDAY_YEAR`. Most Indian holidays move every
 year, so a stale list is silently wrong — `hvWarnStaleHolidayList_()` logs a
 warning once per execution when the calendar year has moved past
-`HV_HOLIDAY_YEAR`. Dependants pin `developmentMode: true` (this project's HEAD),
-so they pick the change up with no version bump and no redeploy — and, by the
-same token, a broken push here reaches them immediately.
+`HV_HOLIDAY_YEAR`.
+
+Dependants run this project's **HEAD** (`version: "0"`, `developmentMode: true`),
+so the refresh reaches them with no manifest change on their side. Note that
+`version` and `developmentMode` are not independent knobs: `developmentMode:
+false` means "use the version specified", so a pinned number and HEAD are the
+only two options — there is no "always the latest released version" setting.
+
+Cut a library version alongside the yearly edit, as a rollback point:
+
+```
+clasp create-version "Work calendar: <year> holidays"
+```
+
+| Version | |
+|---|---|
+| 47 | shared work calendar; 2026 holidays |
+
+Nothing reads those numbers day to day. They exist so that when a bad push here
+breaks a dependant, that one project can be dropped onto known-good code
+(`"version": "47", "developmentMode": false`) while HEAD gets fixed.
 
 Current dependants: `hv-automations/dinner-poll-automation`,
 `hv-automations/pnc-automation/pofu-automation`.
