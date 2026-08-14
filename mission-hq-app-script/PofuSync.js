@@ -34,26 +34,73 @@ const POFU_COLUMN_SPECS = [
 ];
 
 /**
- * Normalizes the org-tree `date_of_joining` ("10-Aug-2026") to yyyy-MM-dd.
- * Unparseable values are passed through as-is rather than dropped — a date we
- * cannot read is still better than a blank cell.
+ * Visual theme for the POFU tab. Kept in one place so the whole sheet can be
+ * re-skinned without hunting through formatPofuSheet_().
  */
-function formatPofuDate_(value) {
+const POFU_THEME = {
+  headerBg: "#243B53",
+  headerText: "#FFFFFF",
+  border: "#D8DEE7",
+  doneBg: "#E3F5E9",     doneText: "#0B6B3A",   // message logged
+  dueBg: "#FFF4E0",      dueText: "#8A5300",    // window open, nothing logged
+  staleBg: "#F1F3F4",    staleText: "#9AA0A6",  // joined too long ago to matter
+  futureBg: "#E8F0FE",   futureText: "#1A56DB", // has not started yet
+  missingBg: "#FCE8E6",  missingText: "#B3261E" // no joining date in Zoho
+};
+
+/**
+ * How far back a joining date can be and still be worth chasing. Beyond this,
+ * blank message cells are greyed out rather than flagged as overdue — otherwise
+ * every employee who joined years ago lights up as "action needed".
+ */
+const POFU_ACTIONABLE_WINDOW_DAYS = 180;
+
+/** Day offset each message column is due at, relative to the joining date. */
+const POFU_MESSAGE_DUE_DAYS = { msg48h: 2, msg30d: 30, msg90d: 90 };
+
+const POFU_COLUMN_WIDTHS = { name: 190, empId: 110, email: 260, doj: 130, msg48h: 150, msg30d: 150, msg90d: 150 };
+const POFU_COLUMN_ALIGNMENTS = { name: "left", empId: "center", email: "left", doj: "center", msg48h: "center", msg30d: "center", msg90d: "center" };
+
+/**
+ * Parses the org-tree `date_of_joining` ("10-Aug-2026") into a real Date, so
+ * the column sorts chronologically and the automation can do day arithmetic on
+ * it without re-parsing strings. Unparseable values are passed through as text
+ * rather than dropped — a date we cannot read still beats a blank cell.
+ * @return {Date|string} a Date, the raw string, or "" when there is no value.
+ */
+function parsePofuDate_(value) {
   if (value === null || value === undefined) return "";
-  const tz = Session.getScriptTimeZone();
 
   if (Object.prototype.toString.call(value) === "[object Date]") {
-    return isNaN(value.getTime()) ? "" : Utilities.formatDate(value, tz, "yyyy-MM-dd");
+    return isNaN(value.getTime()) ? "" : value;
   }
 
   const raw = value.toString().trim();
   if (!raw) return "";
-  if (/^\d{4}-\d{2}-\d{2}/.test(raw)) return raw.substring(0, 10);
+
+  // Build the Date from parts so it lands at local midnight — new Date("2026-08-10")
+  // is parsed as UTC and slips to the previous day in negative-offset zones.
+  const iso = raw.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (iso) return new Date(Number(iso[1]), Number(iso[2]) - 1, Number(iso[3]));
 
   const parsed = new Date(raw);
-  if (!isNaN(parsed.getTime())) return Utilities.formatDate(parsed, tz, "yyyy-MM-dd");
+  if (!isNaN(parsed.getTime())) {
+    return new Date(parsed.getFullYear(), parsed.getMonth(), parsed.getDate());
+  }
 
   return raw;
+}
+
+/** 0-based column index -> A1 letter. */
+function pofuColumnLetter_(index) {
+  let n = index + 1;
+  let letter = "";
+  while (n > 0) {
+    const remainder = (n - 1) % 26;
+    letter = String.fromCharCode(65 + remainder) + letter;
+    n = Math.floor((n - 1) / 26);
+  }
+  return letter;
 }
 
 /**
@@ -93,12 +140,198 @@ function getOrCreatePofuSheet_() {
   });
 
   if (headersAdded.length > 0) {
+    // The grid may be narrower than the header row we are about to write —
+    // a freshly inserted sheet, or one trimmed to its data by formatPofuSheet_().
+    const maxColumns = sheet.getMaxColumns();
+    if (headers.length > maxColumns) sheet.insertColumnsAfter(maxColumns, headers.length - maxColumns);
     sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
-    sheet.getRange(1, 1, 1, headers.length).setFontWeight("bold");
     SpreadsheetApp.flush();
   }
 
   return { sheet: sheet, columns: columns, headersAdded: headersAdded, sheetCreated: sheetCreated };
+}
+
+/**
+ * Restyles the whole tab. Runs at the end of every sync, so the formatting
+ * always covers the rows that exist rather than drifting as people are added.
+ *
+ * Everything here is idempotent — banding and conditional rules are replaced
+ * rather than stacked, so a year of daily runs leaves exactly one of each.
+ *
+ * Deliberately does NOT touch cell *values* except to normalize the joining
+ * date column to real Dates, and never touches the three message columns'
+ * contents — only how they are painted.
+ */
+function formatPofuSheet_(sheet, columns) {
+  const lastRow = sheet.getLastRow();
+  const lastColumn = sheet.getLastColumn();
+  const numRows = Math.max(lastRow - 1, 0);
+
+  // --- Header -------------------------------------------------------------
+  const header = sheet.getRange(1, 1, 1, lastColumn);
+  header
+    .setBackground(POFU_THEME.headerBg)
+    .setFontColor(POFU_THEME.headerText)
+    .setFontWeight("bold")
+    .setFontSize(10)
+    .setVerticalAlignment("middle")
+    .setHorizontalAlignment("left")
+    .setWrap(false);
+  sheet.setRowHeight(1, 34);
+  sheet.setFrozenRows(1);
+
+  // Legend lives on the message headers, where someone wondering what the
+  // colours mean will actually hover.
+  const legend =
+    "Painted automatically by the MissionHQ employee sync:\n" +
+    "  green  — message logged\n" +
+    "  amber  — due and still blank (action needed)\n" +
+    "  grey   — joined over " + POFU_ACTIONABLE_WINDOW_DAYS + " days ago, out of scope\n" +
+    "  blank  — not due yet\n\n" +
+    "This column belongs to the POFU automation. The sync never writes it.";
+  ["msg48h", "msg30d", "msg90d"].forEach(key => {
+    if (columns[key] !== undefined) sheet.getRange(1, columns[key] + 1).setNote(legend);
+  });
+  if (columns.empId !== undefined) {
+    sheet.getRange(1, columns.empId + 1)
+      .setNote("Tracks Zoho and is overwritten whenever it changes there (e.g. contractor 348C -> full-time 348).\nDo not use it as a key — match on email.");
+  }
+
+  // --- Column widths and alignment ---------------------------------------
+  Object.keys(POFU_COLUMN_WIDTHS).forEach(key => {
+    if (columns[key] !== undefined) sheet.setColumnWidth(columns[key] + 1, POFU_COLUMN_WIDTHS[key]);
+  });
+
+  if (numRows > 0) {
+    const data = sheet.getRange(2, 1, numRows, lastColumn);
+    data.setVerticalAlignment("middle").setFontSize(10).setWrap(false);
+
+    Object.keys(POFU_COLUMN_ALIGNMENTS).forEach(key => {
+      if (columns[key] === undefined) return;
+      sheet.getRange(2, columns[key] + 1, numRows, 1)
+        .setHorizontalAlignment(POFU_COLUMN_ALIGNMENTS[key]);
+    });
+
+    // Employee ids are a mix of "551" and "INT390"; forcing plain text stops
+    // Sheets right-aligning half of them and left-aligning the rest.
+    if (columns.empId !== undefined) {
+      sheet.getRange(2, columns.empId + 1, numRows, 1).setNumberFormat("@");
+    }
+
+    // --- Joining date: real Dates, one format ----------------------------
+    if (columns.doj !== undefined) {
+      const dojRange = sheet.getRange(2, columns.doj + 1, numRows, 1);
+      const values = dojRange.getValues();
+      let converted = 0;
+      const normalized = values.map(row => {
+        const value = row[0];
+        if (value === "" || value === null || value === undefined) return [""];
+        if (Object.prototype.toString.call(value) === "[object Date]") return [value];
+        const parsed = parsePofuDate_(value);
+        if (Object.prototype.toString.call(parsed) === "[object Date]") {
+          converted++;
+          return [parsed];
+        }
+        return [value];
+      });
+      if (converted > 0) dojRange.setValues(normalized);
+      dojRange.setNumberFormat("yyyy-mm-dd");
+    }
+
+    // --- Newest joiners first --------------------------------------------
+    // Sorts the full row width so any column a human added travels with its row.
+    if (columns.doj !== undefined) {
+      sheet.getRange(2, 1, numRows, lastColumn).sort({ column: columns.doj + 1, ascending: false });
+    }
+
+    // --- Banding ----------------------------------------------------------
+    sheet.getBandings().forEach(banding => banding.remove());
+    sheet.getRange(2, 1, numRows, lastColumn)
+      .applyRowBanding(SpreadsheetApp.BandingTheme.LIGHT_GREY, false, false);
+
+    sheet.getRange(1, 1, lastRow, lastColumn)
+      .setBorder(true, true, true, true, true, true, POFU_THEME.border, SpreadsheetApp.BorderStyle.SOLID);
+  }
+
+  // --- Conditional formatting --------------------------------------------
+  sheet.setConditionalFormatRules(buildPofuConditionalRules_(sheet, columns, numRows));
+
+  // --- Filter, tab colour, trailing empties -------------------------------
+  if (numRows > 0) {
+    // Left alone once created — recreating it daily would wipe whatever filter
+    // someone currently has applied. Only rebuilt when new rows or columns have
+    // grown past the range it covers.
+    const filter = sheet.getFilter();
+    if (!filter) {
+      sheet.getRange(1, 1, lastRow, lastColumn).createFilter();
+    } else {
+      const covered = filter.getRange();
+      if (covered.getLastRow() < lastRow || covered.getLastColumn() < lastColumn) {
+        filter.remove();
+        sheet.getRange(1, 1, lastRow, lastColumn).createFilter();
+      }
+    }
+  }
+  sheet.setTabColor(POFU_THEME.headerBg);
+
+  // Trim the empty expanse to the right and below, keeping a small pad so
+  // there is somewhere to type.
+  const maxColumns = sheet.getMaxColumns();
+  if (maxColumns > lastColumn) sheet.deleteColumns(lastColumn + 1, maxColumns - lastColumn);
+  const maxRows = sheet.getMaxRows();
+  const keepRows = Math.max(lastRow + 10, 2);
+  if (maxRows > keepRows) sheet.deleteRows(keepRows + 1, maxRows - keepRows);
+}
+
+/**
+ * The colour rules for the three message columns, plus two data-quality rules
+ * on the joining date. All are per-column, so they survive the columns being
+ * in any order.
+ */
+function buildPofuConditionalRules_(sheet, columns, numRows) {
+  const rules = [];
+  if (numRows <= 0 || columns.doj === undefined) return rules;
+
+  const doj = "$" + pofuColumnLetter_(columns.doj) + "2";
+
+  Object.keys(POFU_MESSAGE_DUE_DAYS).forEach(key => {
+    if (columns[key] === undefined) return;
+    const range = sheet.getRange(2, columns[key] + 1, numRows, 1);
+    const cell = pofuColumnLetter_(columns[key]) + "2";
+    const dueDays = POFU_MESSAGE_DUE_DAYS[key];
+
+    // Order matters — the first matching rule wins.
+    rules.push(SpreadsheetApp.newConditionalFormatRule()
+      .whenFormulaSatisfied(`=AND(${doj}<>"", ${cell}<>"")`)
+      .setBackground(POFU_THEME.doneBg).setFontColor(POFU_THEME.doneText)
+      .setRanges([range]).build());
+
+    rules.push(SpreadsheetApp.newConditionalFormatRule()
+      .whenFormulaSatisfied(`=AND(${doj}<>"", ${cell}="", ${doj}<TODAY()-${POFU_ACTIONABLE_WINDOW_DAYS})`)
+      .setBackground(POFU_THEME.staleBg).setFontColor(POFU_THEME.staleText)
+      .setRanges([range]).build());
+
+    rules.push(SpreadsheetApp.newConditionalFormatRule()
+      .whenFormulaSatisfied(`=AND(${doj}<>"", ${cell}="", TODAY()>=${doj}+${dueDays})`)
+      .setBackground(POFU_THEME.dueBg).setFontColor(POFU_THEME.dueText).setBold(true)
+      .setRanges([range]).build());
+  });
+
+  const dojRange = sheet.getRange(2, columns.doj + 1, numRows, 1);
+
+  // Not started yet — nothing is overdue for these people, they are upcoming.
+  rules.push(SpreadsheetApp.newConditionalFormatRule()
+    .whenFormulaSatisfied(`=AND(${doj}<>"", ${doj}>TODAY())`)
+    .setBackground(POFU_THEME.futureBg).setFontColor(POFU_THEME.futureText).setBold(true)
+    .setRanges([dojRange]).build());
+
+  // No joining date in Zoho — this row's triggers can never fire.
+  rules.push(SpreadsheetApp.newConditionalFormatRule()
+    .whenFormulaSatisfied(`=${doj}=""`)
+    .setBackground(POFU_THEME.missingBg).setFontColor(POFU_THEME.missingText)
+    .setRanges([dojRange]).build());
+
+  return rules;
 }
 
 /**
@@ -166,7 +399,7 @@ function syncEmployeesToPofuSheet(employees) {
       .filter(Boolean)
       .join(" ");
     const empId = (employee.emp_id || "").toString().trim();
-    const joiningDate = formatPofuDate_(employee.date_of_joining);
+    const joiningDate = parsePofuDate_(employee.date_of_joining);
     if (!joiningDate) missingJoiningDate++;
 
     if (emailKey in existingRowByEmail) {
@@ -212,9 +445,22 @@ function syncEmployeesToPofuSheet(employees) {
   if (empIdsUpdated > 0) sheet.getRange(2, columns.empId + 1, empIdValues.length, 1).setValues(empIdValues);
   if (joiningDatesFilled > 0) sheet.getRange(2, columns.doj + 1, dojValues.length, 1).setValues(dojValues);
   if (newRows.length > 0) {
+    // formatPofuSheet_() trims the grid to the data plus a small pad, so make
+    // sure there is room before appending.
+    const neededRows = lastRow + newRows.length;
+    const maxRows = sheet.getMaxRows();
+    if (neededRows > maxRows) sheet.insertRowsAfter(maxRows, neededRows - maxRows);
     sheet.getRange(lastRow + 1, 1, newRows.length, rowWidth).setValues(newRows);
   }
   SpreadsheetApp.flush();
+
+  // Restyle last, so the formatting covers the rows just appended. Best-effort:
+  // the roster is the point, the paint job is not worth failing a sync over.
+  try {
+    formatPofuSheet_(sheet, columns);
+  } catch (formatError) {
+    Logger.log(`POFU sync: formatting skipped — ${formatError.message}`);
+  }
 
   if (missingJoiningDate > 0) {
     // Not an error, but worth seeing: their 48h/30d/90d triggers cannot fire
