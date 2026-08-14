@@ -567,6 +567,89 @@ org-tree endpoint and syncs employees into the MissionHQ Log sheet. Idempotent.
 - The `Location` filled here is the geographic site (Bengaluru, etc.) — the same
   column the Zoho attendance push reads for its punch site.
 
+## POFU Sheet Sync (`PofuSync.js`)
+
+Mirrors the org-tree employees into a **second, separate spreadsheet** — the
+POFU HyperVerge sheet (`POFU_SPREADSHEET_ID`), tab **`POFU Automation`** — so the
+onboarding check-in automation (48 hour / 30 day / 90 day messages) has a
+machine-written roster. That automation lives in the POFU sheet's own Apps
+Script project, not here; this repo only keeps the roster fed.
+
+**It never calls Zoho.** `syncEmployeesToPofuSheet(employees)` takes the array
+`fetchZohoOrgTreeEmployees_()` already returned and is invoked from inside
+`syncEmployeesFromZohoOrgTree()` — one org-tree request feeds both sheets. Do
+not add a second fetch here.
+
+The call sits **before** the MissionHQ Log write and is wrapped in try/catch, so
+a POFU failure never fails the employee sync, and a Log-side failure (missing
+column, etc.) does not block POFU either.
+
+### Columns
+
+Created on first run; a sheet that already exists gets only its **missing**
+headers appended at the end, so a hand-arranged tab is never reshuffled.
+
+```text
+Employee Name      from first_name + last_name
+Employee ID        org-tree emp_id
+Employee Email     the match key
+Date of Joining    see below
+48 Hour Message    created, never written by this sync
+30 Day Message     created, never written by this sync
+90 Day Message     created, never written by this sync
+```
+
+Headers are matched by candidate list (case/punctuation-insensitive, via
+`findColumnIndexByCandidates_`), so an existing `Full Name` or `Email Address`
+column is reused instead of a near-duplicate being appended beside it.
+
+### Write rules
+
+Rows are matched by **email**, lower-cased. New emails are appended.
+
+```text
+Employee Name      filled only when blank
+Employee ID        tracks Zoho — overwritten whenever it differs
+Date of Joining    filled only when blank (a hand-corrected date survives)
+the 3 message columns   never touched, ever — the POFU automation owns them
+```
+
+### Date of Joining
+
+Read straight from the org-tree `date_of_joining` field, which arrives as
+`"10-Aug-2026"` and is normalized to `yyyy-MM-dd` by `formatPofuDate_()`. An
+unparseable value is written through as-is rather than dropped; a blank one
+leaves the cell empty and is counted in the log — **those employees' 48h/30d/90d
+triggers cannot fire until the date is filled**, in Zoho or by hand.
+
+The org-tree payload carries far more than this sync uses — `designation`,
+`employment_type`, `business_unit`, `reporting_manager_email`, `date_of_exit`,
+`onboarding_status`, plus personal data (DOB, addresses, PAN, Aadhaar, personal
+email/mobile). **Do not widen the POFU columns into the personal fields**; the
+POFU sheet is shared more broadly than the HRIS.
+
+`date_of_exit` and `onboarding_status` are the useful ones if this ever needs to
+stop tracking leavers or gate on onboarding state.
+
+### Scope
+
+**All active employees** are synced, not just recent hires — so on first run the
+tab fills with the whole org, and the trigger automation is responsible for
+ignoring anyone whose 48h/30d/90d window has already passed.
+
+### Functions
+
+```text
+syncEmployeesToPofuSheet(employees)  // the sync; called by the employee sync
+```
+
+There is deliberately **no** standalone menu entry or "sync POFU only" wrapper —
+that would mean a second org-tree fetch. Re-run **Sync Employees from Zoho**
+instead; it is idempotent and feeds both sheets from the one request.
+
+The Apps Script project must have edit access to the POFU spreadsheet — the
+first run will prompt for the extra Drive/Sheets authorization scope.
+
 ## Attendance Push to Zoho (MissionHQ -> Zoho)
 
 Phase 1 of the reverse integration: pushes who was present each day into Zoho

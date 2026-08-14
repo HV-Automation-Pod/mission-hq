@@ -19,7 +19,18 @@ function syncEmployeesFromZohoOrgTree() {
   const employees = fetchZohoOrgTreeEmployees_();
   if (!employees.length) {
     Logger.log("No employees returned from org-tree endpoint.");
-    return { added: 0, skipped: 0, locationsFilled: 0, empIdsUpdated: 0, slackIdsFilled: 0 };
+    return { added: 0, skipped: 0, locationsFilled: 0, empIdsUpdated: 0, slackIdsFilled: 0, pofuSync: null };
+  }
+
+  // Same payload, second destination: mirror it into the POFU sheet before the
+  // Log write, so this never costs an extra Zoho call and a Log-side failure
+  // (e.g. a missing column) does not also block POFU. Best-effort either way.
+  let pofuSync = null;
+  try {
+    pofuSync = syncEmployeesToPofuSheet(employees);
+  } catch (pofuError) {
+    Logger.log(`POFU sheet sync skipped: ${pofuError.message}`);
+    logToDumpSheet(`POFU sheet sync skipped: ${pofuError.message}`);
   }
 
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CANDIDATE_SHEET_NAME);
@@ -180,7 +191,8 @@ function syncEmployeesFromZohoOrgTree() {
     departmentsUpdated: departmentsUpdated,
     slackIdsFilled: slackIdsFilled,
     skipped: skipped,
-    pmsLevelSync: pmsLevelSync
+    pmsLevelSync: pmsLevelSync,
+    pofuSync: pofuSync
   };
   } catch (e) {
     sendErrorAlert('Employee sync from Zoho org tree failed: ' + (e && e.message ? e.message : e), { functionName: 'syncEmployeesFromZohoOrgTree' });
