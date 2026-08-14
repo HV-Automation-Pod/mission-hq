@@ -95,6 +95,7 @@ Code.js            Slack constants, trivia/messages, doPost entrypoint
 Constants.js       Zoho People constants and property names
 Menu.js            Spreadsheet custom menu
 ProcessData.js     Daily prompt/reminder flows
+WorkCalendar.js    Weekends + the company holiday list (also a shared library)
 SlackMessage.js    Slack message block builders and send helpers
 UpdateData.js      Slack payload handling and sheet/profile updates
 ZohoPeople.js      Zoho People OAuth and leave sync
@@ -566,6 +567,41 @@ org-tree endpoint and syncs employees into the MissionHQ Log sheet. Idempotent.
   position. Each touched column is written back in one batched `setValues`.
 - The `Location` filled here is the geographic site (Bengaluru, etc.) — the same
   column the Zoho attendance push reads for its punch site.
+
+## Work Calendar (`WorkCalendar.js`) — this project is a shared library
+
+Weekends and the **company holiday list** live here, and this project is
+published as an Apps Script library so the rest of the org reads the same list
+instead of each automation keeping a copy:
+
+```json
+{ "userSymbol": "MissionHQ",
+  "libraryId": "1rfcF-KeUDthKpZ2kmXkefHXa0fAYzWrOuO-tTAs702ZhUVpxPXICa-uH",
+  "version": "0", "developmentMode": true }
+```
+
+| Exported | |
+|---|---|
+| `isWeekend([date])` | Saturday or Sunday; defaults to today, logs |
+| `isHoliday([date])` | on the holiday list; defaults to today, logs |
+| `isBusinessDay(date)` | neither — quiet, safe to call in a loop |
+| `rollToBusinessDay(date)` | that day, or the next working one |
+| `addBusinessDays(date, n)` | n working days later (start day not counted) |
+| `getHolidays()` / `getHolidayYear()` | the raw `MM/DD` list and its vintage |
+
+**The yearly refresh happens here and nowhere else.** Replace the array in
+`hvHolidays_()` and bump `HV_HOLIDAY_YEAR`. Most Indian holidays move every
+year, so a stale list is silently wrong — `hvWarnStaleHolidayList_()` logs a
+warning once per execution when the calendar year has moved past
+`HV_HOLIDAY_YEAR`. Dependants pin `developmentMode: true` (this project's HEAD),
+so they pick the change up with no version bump and no redeploy — and, by the
+same token, a broken push here reaches them immediately.
+
+Current dependants: `hv-automations/dinner-poll-automation`,
+`hv-automations/pnc-automation/pofu-automation`.
+
+Inside this project just call `isWeekend()` / `isHoliday()` directly — they used
+to live in `ProcessData.js` and the call sites there are unchanged.
 
 ## POFU Sheet Sync (`PofuSync.js`)
 
