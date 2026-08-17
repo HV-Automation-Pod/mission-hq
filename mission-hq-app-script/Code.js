@@ -216,27 +216,73 @@ const TRIVIA = [
 ];
 
 function doPost(e) {
+  // Declared outside the try so the catch can still name who was affected —
+  // a const declared inside would be in the temporal dead zone here.
+  let email = "";
+  let date = "";
+  let status = "";
+
   try {
     if (!e.postData || !e.postData.contents) {
       throw new Error("No postData or contents in the request");
     }
 
     const data = JSON.parse(e.postData.contents);
-    const email = (data.email || "").toString().trim();
-    const date = (data.date || "").toString().trim();
-    const status = (data.status || "").toString().trim();
+    email = (data.email || "").toString().trim();
+    date = (data.date || "").toString().trim();
+    status = (data.status || "").toString().trim();
     logToDumpSheet(`Sheet write request: email=${email}, date=${date}, status=${status}`);
 
     if (!email || !date || !status) {
+      alertSheetWriteFailure_(email, date, status, "Missing email, date, or status");
       return jsonOutput_({ success: false, message: "Missing email, date, or status" });
     }
 
     const result = updateLocationByEmailID(email, status, date);
     logToDumpSheet(`Sheet write result for ${email}: ${JSON.stringify(result)}`);
+
+    // The user has already been told "we received your response" by the edge
+    // function, so a failure here is invisible to them and to us unless we say
+    // so. Alert, never throw — the response is already lost, don't compound it.
+    if (!result || !result.success) {
+      alertSheetWriteFailure_(email, date, status, (result && result.message) || 'unknown error');
+    }
+
     return jsonOutput_(result);
   } catch (error) {
     logToDumpSheet('Error in doPost: ' + error.toString());
+    alertSheetWriteFailure_(email, date, status, error.toString());
     return jsonOutput_({ success: false, error: error.toString() });
+  }
+}
+
+/**
+ * A sheet write that fails here is silent by construction: the Supabase edge
+ * function has already sent the user "Thank you for your update! We received
+ * your response...", and it only checks the HTTP status of this call, never the
+ * body. So without this alert the response is lost with nobody the wiser —
+ * which is exactly how the reported glitch went unnoticed.
+ *
+ * Routed through sendErrorAlert() (SlackAlerts.js) so it lands in
+ * #automation-alerts like every other HV automation. The dedup key is
+ * function + error text, so `reason` deliberately carries no employee name —
+ * during the post-prompt burst a hundred identical failures collapse into one
+ * alert, and the affected rows are recoverable from DUMP and the daily sweep.
+ */
+function alertSheetWriteFailure_(email, date, status, reason) {
+  try {
+    logToDumpSheet(`ALERT: sheet write failed for ${email} on ${date}: ${reason}`);
+    sendErrorAlert(`Attendance write failed — the user was told it succeeded: ${reason}`, {
+      functionName: 'doPost',
+      sheetName: CANDIDATE_SHEET_NAME,
+      additionalInfo:
+        `First affected: \`${email || 'unknown'}\` on \`${date || 'unknown'}\` ` +
+        `(response \`${status || 'unknown'}\`). The cell still shows \`Pending\`. ` +
+        `The 20:00 sweep recovers it from the Slack DM, or run \`fixMissedResponses()\` now.`,
+    });
+  } catch (alertError) {
+    // Never let alerting break the request path.
+    Logger.log('Failed to send sheet-write-failure alert: ' + alertError.toString());
   }
 }
 

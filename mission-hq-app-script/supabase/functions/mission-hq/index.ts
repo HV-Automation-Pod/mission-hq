@@ -245,21 +245,110 @@ async function resolveUserEmail(userId: string) {
 
 // Forwards a clean, pre-processed record to Apps Script, which only writes the
 // Google Sheet: { email, date, status }.
+/**
+ * Posts to #automation-alerts when a response is about to be lost, matching the
+ * shape sendErrorAlert() uses in the Apps Script side (SlackAlerts.js) so every
+ * HV automation's failures read the same in the channel.
+ *
+ * Best effort: alerting must never be the reason a request fails.
+ *
+ * This Supabase project is shared by every HV automation and sits at the 100-
+ * secret cap, so both lookups fall back to secrets that already exist rather
+ * than requiring new ones:
+ *   channel: MISSION_HQ_ALERT_CHANNEL_ID -> ALERT_SLACK_CHANNEL_ID
+ *   token:   MISSION_HQ_ALERT_BOT_TOKEN  -> MISSION_HQ_SLACK_BOT_TOKEN
+ * On the fallback token the attendance bot must be a member of the channel.
+ * No-ops entirely if no channel is configured.
+ */
+async function alertLostResponse(record: { email: string; date: string; status: string }, reason: string) {
+  const alertChannel = Deno.env.get("MISSION_HQ_ALERT_CHANNEL_ID") ||
+    Deno.env.get("ALERT_SLACK_CHANNEL_ID");
+  if (!alertChannel) return;
+  try {
+    const token = Deno.env.get("MISSION_HQ_ALERT_BOT_TOKEN") ||
+      getRequiredEnv("MISSION_HQ_SLACK_BOT_TOKEN");
+    const response = await fetch("https://slack.com/api/chat.postMessage", {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({
+        channel: alertChannel,
+        unfurl_links: false,
+        text:
+          `:rotating_light: *MissionHQ Alert*\n\n` +
+          `*Error:* \`Attendance response LOST — the user was told it was saved: ${reason}\`\n` +
+          `*Function:* \`mission-hq edge function / forwardToAppsScript\`\n` +
+          `*Details:* \`${record.email}\` on \`${record.date}\` (response \`${record.status}\`). ` +
+          `The sheet still shows \`Pending\`. The 20:00 sweep recovers it from the Slack DM.`,
+      }),
+    });
+    const json = await response.json();
+    if (!json.ok) console.error("MissionHQ alert rejected by Slack", json.error);
+  } catch (alertError) {
+    console.error("MissionHQ alert failed", alertError);
+  }
+}
+
+/**
+ * Forwards the record to Apps Script, retrying transient failures.
+ *
+ * The confirmation has already been shown to the user by this point, so giving
+ * up here loses their answer with nobody the wiser. That is how the reported
+ * glitch stayed invisible. Three attempts with backoff cover the Apps Script
+ * concurrency errors seen during the post-prompt submit burst; if all three
+ * fail we alert rather than swallow.
+ *
+ * Apps Script answers HTTP 200 even when the sheet write failed, so the JSON
+ * body is inspected too — `response.ok` alone is not evidence of success.
+ */
 async function forwardToAppsScript(record: { email: string; date: string; status: string; department?: string; location?: string }) {
   const appsScriptUrl = getRequiredEnv("MISSION_HQ_APPS_SCRIPT_URL");
   const headers: Record<string, string> = { "content-type": "application/json" };
   const sharedSecret = Deno.env.get("MISSION_HQ_APPS_SCRIPT_SHARED_SECRET");
   if (sharedSecret) headers["x-mission-hq-secret"] = sharedSecret;
 
-  const response = await fetch(appsScriptUrl, {
-    method: "POST",
-    headers,
-    body: JSON.stringify(record),
-  });
+  const attempts = 3;
+  let lastReason = "";
 
-  if (!response.ok) {
-    throw new Error(`Apps Script forward failed: HTTP ${response.status} ${await response.text()}`);
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      const response = await fetch(appsScriptUrl, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(record),
+      });
+      const body = await response.text();
+
+      if (!response.ok) {
+        lastReason = `HTTP ${response.status} ${body.slice(0, 300)}`;
+      } else {
+        // A 200 carrying {"success":false} is a failed write wearing a success
+        // status code — treat it as the failure it is.
+        let succeeded = true;
+        try {
+          const parsed = JSON.parse(body);
+          if (parsed && parsed.success === false) {
+            succeeded = false;
+            lastReason = `Apps Script reported: ${parsed.message || parsed.error || "success:false"}`;
+          }
+        } catch {
+          // Non-JSON 200 (e.g. an Apps Script error page) — assume the worst.
+          succeeded = false;
+          lastReason = `non-JSON response: ${body.slice(0, 300)}`;
+        }
+        if (succeeded) return;
+      }
+    } catch (error) {
+      lastReason = `fetch threw: ${error instanceof Error ? error.message : String(error)}`;
+    }
+
+    console.error(`MissionHQ forward attempt ${attempt}/${attempts} failed: ${lastReason}`);
+    if (attempt < attempts) {
+      await new Promise((resolve) => setTimeout(resolve, attempt * 1500));
+    }
   }
+
+  await alertLostResponse(record, lastReason);
+  throw new Error(`Apps Script forward failed after ${attempts} attempts: ${lastReason}`);
 }
 
 async function processSlackInteraction(payload: SlackPayload) {
