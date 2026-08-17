@@ -117,8 +117,17 @@ function processEmailsAndSendSlackMessage() {
           }
           const result = collectEmployeeLocationMessage(slackId, name, email, currentStep, currentFact, department, location, locations);
           if (result.success) {
-            sheet.getRange(i + 1, dateColIndex + 1).setValue("Pending");
-            SpreadsheetApp.flush();
+            // Re-read the LIVE cell instead of trusting `data`, which is a
+            // snapshot taken minutes ago at the top of this loop. A fast user
+            // can answer between the DM landing and this line, and stamping
+            // "Pending" blindly would erase the answer they just gave.
+            const promptCell = sheet.getRange(i + 1, dateColIndex + 1);
+            if (!promptCell.getDisplayValue().toString().trim()) {
+              promptCell.setValue("Pending");
+              SpreadsheetApp.flush();
+            } else {
+              Logger.log(`Row ${i + 1}: answered before the Pending marker was written — left as is`);
+            }
             sentCount++;
           } else {
             throw new Error(result.message);
@@ -231,6 +240,16 @@ function processPendingEmailsAndSendSlackReminder() {
     }
     const slackIdColIndex = slackIdCol.index;
 
+    // DM channel ids are cached alongside the Slack user ids so the reminder
+    // run doesn't re-open every conversation each afternoon.
+    const dmCol = getOrCreateColumnIndex_(sheet, DM_CHANNEL_COLUMN);
+    if (dmCol.created) {
+      data = sheet.getDataRange().getDisplayValues();
+      headers = data[0].map(header => header.toString().trim());
+      dateColIndex = headers.indexOf(todayDate);
+    }
+    const dmColIndex = dmCol.index;
+
     let sentCount = 0;
     let failedCount = 0;
     for (let i = 1; i < data.length; i++) {
@@ -244,6 +263,17 @@ function processPendingEmailsAndSendSlackReminder() {
           failedCount++;
           continue;
         }
+        // `data` was snapshotted at the top of this loop and the loop sleeps a
+        // second per user, so by the time we reach this row the snapshot can be
+        // many minutes stale. Re-read live: the person may have answered
+        // already, in which case they must not be nagged — and must certainly
+        // not be marked Pending again.
+        const liveStatus = sheet.getRange(i + 1, dateColIndex + 1).getDisplayValue().toString().trim();
+        if (liveStatus !== "Pending") {
+          Logger.log(`Row ${i + 1}: answered since the snapshot (now "${liveStatus}") — reminder skipped`);
+          continue;
+        }
+
         console.log(email);
         try {
           let slackId = slackIdColIndex !== -1 ? (row[slackIdColIndex]?.toString().trim() || "") : "";
@@ -255,11 +285,26 @@ function processPendingEmailsAndSendSlackReminder() {
               sheet.getRange(i + 1, slackIdColIndex + 1).setValue(slackId); // cache for next run
             }
           }
-          let textMessage = `📍 ${name}, please submit your location for today. Are you at HQ, home, or on-site? Update now to keep MissionHQ informed.`
-          const result = sendSlackConfirmationMessage(slackId, textMessage);
+          // Reminder goes into the thread of today's prompt, not as a new DM,
+          // so it sits directly under the message with the Submit button. The
+          // user is @-mentioned inside it — a thread reply alone is easy to
+          // miss, the mention is what raises the notification.
+          let dmChannel = dmColIndex !== -1 ? (row[dmColIndex]?.toString().trim() || "") : "";
+          if (!dmChannel) {
+            dmChannel = openDmChannelId_(slackId);
+            if (dmChannel && dmColIndex !== -1) {
+              sheet.getRange(i + 1, dmColIndex + 1).setValue(dmChannel); // cache for next run
+            }
+          }
+          const result = sendLocationReminder_(slackId, dmChannel, todayDate, email);
           if (result.success) {
-            sheet.getRange(i + 1, dateColIndex + 1).setValue("Pending");
-            SpreadsheetApp.flush();
+            Logger.log(`Reminder to ${email}: ${result.message}`);
+            // Deliberately does NOT write "Pending" back. The cell already said
+            // Pending — that is the only reason a reminder was sent — so this
+            // write was a no-op in the happy path. Its one real effect was to
+            // overwrite answers that arrived between the snapshot at the top of
+            // this loop and the loop reaching this row, which is how the
+            // majority of the confirmed lost responses were destroyed.
             sentCount++;
           } else {
             throw new Error(result.message);
