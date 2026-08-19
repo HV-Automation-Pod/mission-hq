@@ -62,6 +62,7 @@ function _getSheetData() {
   const nameCol = headers.indexOf("Full Name");
   const emailCol = headers.indexOf("Email Address");
   const deptCol = headers.indexOf("Department");
+  const exemptCol = headers.indexOf(WFO_EXEMPT_COLUMN);
 
   if (nameCol === -1 || emailCol === -1) {
     throw new Error("Required columns 'Full Name' or 'Email Address' not found");
@@ -84,8 +85,18 @@ function _getSheetData() {
     nameCol: nameCol,
     emailCol: emailCol,
     deptCol: deptCol,
+    exemptCol: exemptCol,
     dateColumns: dateColumns
   };
+}
+
+/**
+ * True for offboarded people and approved exceptions (the Log's WFO Exempt
+ * column). Every dashboard endpoint skips them, so they stop counting towards
+ * the numbers without their history being deleted.
+ */
+function _isExemptRow(sd, row) {
+  return sd.exemptCol !== -1 && isWfoExempt_(row[sd.exemptCol]);
 }
 
 /**
@@ -98,7 +109,7 @@ function getAllEmployeeData() {
   for (var i = 1; i < sd.data.length; i++) {
     var row = sd.data[i];
     var email = row[sd.emailCol] ? row[sd.emailCol].toString().trim() : "";
-    if (!email) continue;
+    if (!email || _isExemptRow(sd, row)) continue;
 
     var statuses = {};
     sd.dateColumns.forEach(function(d) {
@@ -136,7 +147,7 @@ function getTodayData() {
   for (var i = 1; i < sd.data.length; i++) {
     var row = sd.data[i];
     var email = row[sd.emailCol] ? row[sd.emailCol].toString().trim() : "";
-    if (!email) continue;
+    if (!email || _isExemptRow(sd, row)) continue;
 
     employees.push({
       name: row[sd.nameCol] ? row[sd.nameCol].toString().trim() : "",
@@ -174,7 +185,7 @@ function getDateRangeData(from, to) {
   for (var i = 1; i < sd.data.length; i++) {
     var row = sd.data[i];
     var email = row[sd.emailCol] ? row[sd.emailCol].toString().trim() : "";
-    if (!email) continue;
+    if (!email || _isExemptRow(sd, row)) continue;
 
     var statuses = {};
     filteredDates.forEach(function(d) {

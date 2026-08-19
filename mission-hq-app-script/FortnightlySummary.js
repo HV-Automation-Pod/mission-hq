@@ -207,8 +207,9 @@ function logDetailedAudit(groupKey) {
     Logger.log(`\n═══ ${group.title} — ${period.label} (${snapshot.dateColumns.length} working days) ═══`);
     results.forEach(member => {
       Logger.log(`\n${member.name}`);
-      Logger.log(`  WFO=${member.wfo} WFH=${member.wfh} WFA=${member.wfa} (YTD ${member.wfaYtd}/${WFA_ANNUAL_CAP}, ${member.wfaOverCap} over-cap this period) Leave=${member.leave} Pending=${member.pending}`);
-      Logger.log(`  Available=${member.available} (${snapshot.dateColumns.length} - ${member.leave} leave - ${member.wfa} WFA)`);
+      Logger.log(`  WFO=${member.wfo} WFH=${member.wfh} WFA=${member.wfa} (YTD ${member.wfaYtd}/${WFA_ANNUAL_CAP}, ${member.wfaOverCap} over-cap this period) Leave=${member.leave} Pending=${member.pending} NotPrompted=${member.notPrompted}`);
+      Logger.log(`  Available=${member.available} (${snapshot.dateColumns.length} - ${member.notPrompted} not prompted - ${member.leave} leave - ${member.wfa} WFA)`);
+      if (member.prompted === 0) Logger.log("  NOT IN THE REPORT — no prompt reached them this period");
       Logger.log(`  True Adherence: ${member.wfo}/${member.available} = ${member.trueAdh}%`);
       Logger.log(`  CI Rate: ${member.checkedIn}/${member.available} = ${member.ciRate}%`);
       member.days.forEach(day => Logger.log(`    ${day.date}: ${day.raw || "(blank)"} → ${day.category}`));
@@ -262,8 +263,22 @@ function runSummariesForPeriod_(period, options) {
       }
 
       const memberMetrics = computeMemberMetrics_(members, snapshot, group.key, period);
-      const ranked = memberMetrics.filter(member => member.available > 0);
-      const fullPeriodLeave = memberMetrics.filter(member => member.available === 0);
+
+      // Never prompted once all period — an exited employee whose Slack account
+      // is deactivated, or someone who joined after the period ended. They are
+      // left out of the report entirely rather than ranked at 0%, which is what
+      // dragged a group's numbers down before. Their sheet history is untouched.
+      const neverPrompted = memberMetrics.filter(member => member.prompted === 0);
+      if (neverPrompted.length > 0) {
+        Logger.log(
+          `${group.title}: ${neverPrompted.length} member(s) never prompted this period, ` +
+          `excluded — ${neverPrompted.map(member => member.name).join(", ")}`
+        );
+      }
+
+      const participating = memberMetrics.filter(member => member.prompted > 0);
+      const ranked = participating.filter(member => member.available > 0);
+      const fullPeriodLeave = participating.filter(member => member.available === 0);
 
       if (ranked.length === 0) {
         const reason = "every member had no scored days (all leave/WFA) for the period";
@@ -420,12 +435,45 @@ function readMissionHqSnapshot_(startDate, endDate) {
     nameColIndex: nameColIndex,
     departmentColIndex: headers.indexOf("Department"),
     locationColIndex: headers.indexOf("Location"),
+    wfoExemptColIndex: headers.indexOf(WFO_EXEMPT_COLUMN),
     dateColumns: dateColumns,
     ytdDateColumns: ytdDateColumns
   };
 }
 
+/**
+ * The group's rows, minus anyone marked in the Log's WFO Exempt column —
+ * offboarded people and approved exceptions. Applied to every matcher in one
+ * place, so a new group cannot forget it.
+ */
 function resolveGroupMembers_(group, snapshot) {
+  const matched = matchGroupRows_(group, snapshot);
+  if (snapshot.wfoExemptColIndex === -1) return matched;
+
+  const kept = [];
+  const exempt = [];
+  matched.forEach(row => {
+    if (isWfoExempt_(row[snapshot.wfoExemptColIndex])) {
+      exempt.push(rowLabel_(row, snapshot));
+    } else {
+      kept.push(row);
+    }
+  });
+  if (exempt.length > 0) {
+    Logger.log(`${group.title}: ${exempt.length} exempt row(s) excluded — ${exempt.join(", ")}`);
+  }
+  return kept;
+}
+
+/** Full Name, falling back to the email — for log lines about a row. */
+function rowLabel_(row, snapshot) {
+  const name = snapshot.nameColIndex !== -1 && row[snapshot.nameColIndex]
+    ? row[snapshot.nameColIndex].toString().trim()
+    : "";
+  return name || (row[snapshot.emailColIndex] || "").toString().trim();
+}
+
+function matchGroupRows_(group, snapshot) {
   const matcher = group.match;
 
   if (matcher.type === "column") {
@@ -551,8 +599,10 @@ function normalizeSummaryKey_(value) {
  * period's WFA days are within the allowance is decided by how many WFA days the
  * person already used earlier in the year (priorWfa).
  *
- * A blank cell counts as Pending, matching "pending = invisible": a day with no
- * check-in cannot be credited as presence.
+ * A literal "Pending" counts against the person — "pending = invisible": a day
+ * with no check-in cannot be credited as presence. A BLANK cell is different:
+ * it means no prompt was ever sent that day, so the day is excluded from the
+ * denominator entirely. See classifyAttendanceStatus_.
  */
 function computeMemberMetrics_(members, snapshot, groupKey, period) {
   const previousScores = readPreviousScores_(groupKey, period);
@@ -567,6 +617,7 @@ function computeMemberMetrics_(members, snapshot, groupKey, period) {
     let wfa = 0;
     let leave = 0;
     let pending = 0;
+    let notPrompted = 0;
     const days = [];
 
     snapshot.dateColumns.forEach(column => {
@@ -577,6 +628,7 @@ function computeMemberMetrics_(members, snapshot, groupKey, period) {
       else if (category === "WFH") wfh++;
       else if (category === "WFA") wfa++;
       else if (category === "LEAVE") leave++;
+      else if (category === "NOTPROMPTED") notPrompted++;
       else pending++;
     });
 
@@ -589,6 +641,11 @@ function computeMemberMetrics_(members, snapshot, groupKey, period) {
     });
 
     const totalDays = snapshot.dateColumns.length;
+    // Days this person was actually asked about. Zero means no prompt reached
+    // them all period — an exited employee whose Slack account is gone, or
+    // someone who joined after it ended. They are dropped from the report by
+    // the caller rather than scored 0%.
+    const prompted = totalDays - notPrompted;
 
     // Split this period's WFA into "within entitlement" and "over cap". The
     // person's WFA days earlier in the year (priorWfa) consume the allowance
@@ -600,7 +657,7 @@ function computeMemberMetrics_(members, snapshot, groupKey, period) {
 
     // Only within-entitlement WFA is excused from the denominator. Over-cap WFA
     // stays in, and is a check-in (they did respond) but not office.
-    const available = totalDays - leave - wfaWithin;
+    const available = prompted - leave - wfaWithin;
     const checkedIn = wfo + wfh + wfaOverCap;
     const trueAdh = available > 0 ? Math.round((wfo / available) * 100) : 0;
     const ciRate = available > 0 ? Math.round((checkedIn / available) * 100) : 0;
@@ -618,6 +675,8 @@ function computeMemberMetrics_(members, snapshot, groupKey, period) {
       wfaOverCap: wfaOverCap,
       leave: leave,
       pending: pending,
+      notPrompted: notPrompted,
+      prompted: prompted,
       available: available,
       checkedIn: checkedIn,
       trueAdh: trueAdh,
@@ -632,8 +691,16 @@ function computeMemberMetrics_(members, snapshot, groupKey, period) {
   return results;
 }
 
+/**
+ * NOTPROMPTED vs PENDING is the difference between "we never asked" and "we
+ * asked and got nothing". The prompt flow writes "Pending" only after a DM
+ * actually goes out (ProcessData.js), so a blank cell means no prompt reached
+ * that person that day — a deactivated Slack account, someone who had not
+ * joined yet, or a row marked WFO Exempt. Those days are excluded from their
+ * denominator; a literal "Pending" still counts against them.
+ */
 function classifyAttendanceStatus_(raw) {
-  if (!raw) return "PENDING";
+  if (!raw) return "NOTPROMPTED";
   const normalized = normalizeSummaryKey_(raw);
   if (normalized === "pending") return "PENDING";
   if (WFO_STATUSES.some(status => normalizeSummaryKey_(status) === normalized)) return "WFO";
@@ -788,7 +855,9 @@ function buildSnapshotMessage_(group, ranked, tiers, fullPeriodLeave, snapshot, 
   const totalCheckedIn = sumBy_(ranked, member => member.checkedIn);
   const totalPending = sumBy_(ranked, member => member.pending);
   const totalWfa = sumBy_(ranked, member => member.wfa);
-  const totalSlots = totalMembers * workingDays;
+  // Days people were actually prompted on — not members × working days, which
+  // would count days nobody was ever asked about against the pending rate.
+  const totalSlots = sumBy_(ranked, member => member.prompted);
 
   const orgTrueAdh = totalAvailable > 0 ? Math.round((totalWfo / totalAvailable) * 100) : 0;
   const orgCi = totalAvailable > 0 ? Math.round((totalCheckedIn / totalAvailable) * 100) : 0;
@@ -916,9 +985,10 @@ function buildSnapshotMessage_(group, ranked, tiers, fullPeriodLeave, snapshot, 
     elements: [{
       type: "mrkdwn",
       text:
-        `*How this is calculated*  ·  *Available days* = ${workingDays} working days − leave − WFA; ` +
-        "leave and WFA (up to the 10-day yearly entitlement) are excluded, counting " +
-        "neither for nor against you. WFA days beyond 10/year DO count against adherence  ·  " +
+        `*How this is calculated*  ·  *Available days* = ${workingDays} working days − leave − WFA ` +
+        "− any day no check-in prompt was sent to you; leave and WFA (up to the 10-day yearly " +
+        "entitlement) are excluded, counting neither for nor against you. WFA days beyond " +
+        "10/year DO count against adherence  ·  " +
         "*True WFO Adherence* = WFO days ÷ available days  ·  " +
         "*WFO* = Office, Client, Client Location, Split Day, Travel, Office + Client, " +
         "Compensatory WFH, Half Day Office Leave  ·  *WFH* = Home, Half Day WFH Leave."

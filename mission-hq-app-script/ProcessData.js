@@ -75,6 +75,17 @@ function processEmailsAndSendSlackMessage() {
     }
     const slackIdColIndex = slackIdCol.index;
 
+    // Offboarded people and approved exceptions. Skipped before any Slack call,
+    // so a deactivated account is never messaged and their cell stays blank —
+    // which is what marks them absent-by-design rather than unanswered.
+    const exemptCol = getOrCreateColumnIndex_(sheet, WFO_EXEMPT_COLUMN);
+    if (exemptCol.created) {
+      data = sheet.getDataRange().getDisplayValues();
+      headers = data[0].map(header => header.toString().trim());
+      dateColIndex = headers.indexOf(todayDate);
+    }
+    const exemptColIndex = exemptCol.index;
+
     // Optional columns whose values ride along inside the Submit button value.
     const deptColIndex = headers.indexOf("Department");
     const locColIndex = headers.indexOf("Location");
@@ -88,6 +99,10 @@ function processEmailsAndSendSlackMessage() {
     for (let i = 1; i < data.length; i++) {
       const row = data[i];
       if (row) {
+        if (exemptColIndex !== -1 && isWfoExempt_(row[exemptColIndex])) {
+          Logger.log(`Skipping row ${i + 1}: ${WFO_EXEMPT_COLUMN} = "${row[exemptColIndex]}"`);
+          continue;
+        }
         if (row[dateColIndex]) {
           if (row[dateColIndex] === "Leave") {
             Logger.log(`Skipping row ${i + 1}: Approved Zoho leave for ${todayDate}`);
@@ -250,10 +265,25 @@ function processPendingEmailsAndSendSlackReminder() {
     }
     const dmColIndex = dmCol.index;
 
+    // Same exemption as the prompt flow. It matters here too: someone marked
+    // exempt today may still carry a "Pending" from this morning's run, and must
+    // not be nagged about it.
+    const exemptCol = getOrCreateColumnIndex_(sheet, WFO_EXEMPT_COLUMN);
+    if (exemptCol.created) {
+      data = sheet.getDataRange().getDisplayValues();
+      headers = data[0].map(header => header.toString().trim());
+      dateColIndex = headers.indexOf(todayDate);
+    }
+    const exemptColIndex = exemptCol.index;
+
     let sentCount = 0;
     let failedCount = 0;
     for (let i = 1; i < data.length; i++) {
       const row = data[i];
+      if (exemptColIndex !== -1 && isWfoExempt_(row[exemptColIndex])) {
+        Logger.log(`Skipping row ${i + 1}: ${WFO_EXEMPT_COLUMN} = "${row[exemptColIndex]}"`);
+        continue;
+      }
       let status = row[dateColIndex];
       if (status === "Pending") { // Changed from = to === for correct comparison
         const email = row[emailColIndex]?.toString().trim();

@@ -15,6 +15,22 @@ const SLACK_RESPONSES_SHEET_NAME = "MissionHQ Log";
 const LOCATIONS_SHEET_NAME = "Locations";
 const SLACK_USER_ID_COLUMN = "Slack User ID";
 
+// Rows with a value in this column are out of WFO attendance entirely: no daily
+// prompt, no reminder, and excluded from every fortnightly summary group. Their
+// history stays in the sheet — this hides them from what runs from today on, it
+// never deletes anything. Any text counts and doubles as the reason
+// ("Offboarded 2026-08-18", "Exception — approved by PnC"); the column is
+// created automatically at the end of the sheet on the next prompt run.
+const WFO_EXEMPT_COLUMN = "WFO Exempt";
+// ...except these, so a stray "No" cannot silently drop someone.
+const WFO_EXEMPT_FALSE_VALUES = ["no", "n", "false", "0", "-"];
+
+function isWfoExempt_(value) {
+  const text = (value === null || value === undefined ? "" : value.toString()).trim().toLowerCase();
+  if (!text) return false;
+  return WFO_EXEMPT_FALSE_VALUES.indexOf(text) === -1;
+}
+
 const SLACK_BOT_TOKEN = getRequiredScriptProperty_("SLACK_BOT_TOKEN");
 const SLACK_USER_TOKEN = getRequiredScriptProperty_("SLACK_USER_TOKEN");
 const SLACK_CHANNEL_ID = getRequiredScriptProperty_("SLACK_CHANNEL_ID");
