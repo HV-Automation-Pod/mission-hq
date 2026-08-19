@@ -46,9 +46,19 @@ const PMS_MANAGER_LEVEL_PATTERN = /^m\d+$/; // m1, m2, m3 ... after normalizing
 // Managers group is matched against.
 const PMS_LEVEL_COLUMN = "PMS Level";
 
+// --- FLG roster tab ----------------------------------------------------------
+// FLG is not a Zoho department — its members sit across several departments, so
+// the Log's Department column (which tracks Zoho, see SyncEmployees.js) can
+// never name them. The membership list is instead maintained by hand on the
+// "FLG" tab of this same spreadsheet, one row per person with an
+// "Email Address" column, and joined to the Log by email.
+const FLG_ROSTER_SHEET_NAME = "FLG";
+const SUMMARY_ROSTER_EMAIL_COLUMNS = ["Email Address", "Email ID", "Email"];
+
 // --- Groups ------------------------------------------------------------------
 // column matcher: the sheet cell is split on commas, so a Department of
 // "Finance, FLG" belongs to both the FLG group and the G&A group.
+// roster matcher: membership comes from a separate tab's email column.
 const SUMMARY_GROUPS = [
   {
     key: "coimbatore",
@@ -62,7 +72,7 @@ const SUMMARY_GROUPS = [
     title: "FLG",
     channelId: "C07R3JUEL86",
     botName: "FLG Attendance Summary",
-    match: { type: "column", column: "Department", values: ["FLG"] }
+    match: { type: "roster", sheet: FLG_ROSTER_SHEET_NAME }
   },
   {
     key: "mumbai",
@@ -441,7 +451,70 @@ function resolveGroupMembers_(group, snapshot) {
     });
   }
 
+  if (matcher.type === "roster") {
+    const rosterEmails = readRosterEmails_(matcher.sheet);
+    if (rosterEmails.length === 0) {
+      throw new Error(`Roster sheet "${matcher.sheet}" has no email addresses`);
+    }
+
+    const wanted = {};
+    rosterEmails.forEach(email => { wanted[email] = false; });
+
+    const members = snapshot.rows.filter(row => {
+      const email = row[snapshot.emailColIndex]
+        ? row[snapshot.emailColIndex].toString().trim().toLowerCase()
+        : "";
+      if (!email || !(email in wanted)) return false;
+      wanted[email] = true;
+      return true;
+    });
+
+    // Someone on the roster with no Log row would silently vanish from the
+    // summary, so name them instead of quietly reporting a short group.
+    const missing = Object.keys(wanted).filter(email => !wanted[email]);
+    if (missing.length > 0) {
+      Logger.log(
+        `Roster "${matcher.sheet}": ${missing.length} email(s) not found in ` +
+        `${CANDIDATE_SHEET_NAME} — ${missing.join(", ")}`
+      );
+    }
+    Logger.log(`Roster "${matcher.sheet}": ${members.length} of ${rosterEmails.length} matched.`);
+
+    return members;
+  }
+
   throw new Error(`Unknown matcher type "${matcher.type}" for group ${group.key}`);
+}
+
+/**
+ * Lower-cased, de-duplicated emails from a roster tab's email column. The
+ * header is looked up by name (never by position) among
+ * SUMMARY_ROSTER_EMAIL_COLUMNS, so the tab can carry any other columns it likes.
+ */
+function readRosterEmails_(sheetName) {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(sheetName);
+  if (!sheet) throw new Error(`Roster sheet "${sheetName}" not found`);
+
+  const data = sheet.getDataRange().getDisplayValues();
+  if (data.length < 2) return [];
+
+  const headers = data[0].map(header => header.toString().trim());
+  const emailColIndex = findColumnIndexByCandidates_(headers, SUMMARY_ROSTER_EMAIL_COLUMNS);
+  if (emailColIndex === -1) {
+    throw new Error(
+      `No email column (${SUMMARY_ROSTER_EMAIL_COLUMNS.join(" / ")}) in roster sheet "${sheetName}"`
+    );
+  }
+
+  const seen = {};
+  const emails = [];
+  data.slice(1).forEach(row => {
+    const email = row[emailColIndex] ? row[emailColIndex].toString().trim().toLowerCase() : "";
+    if (!email || email in seen) return;
+    seen[email] = true;
+    emails.push(email);
+  });
+  return emails;
 }
 
 /** "Finance, FLG" -> ["finance", "flg"] */

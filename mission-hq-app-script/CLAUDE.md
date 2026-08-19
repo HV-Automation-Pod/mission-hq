@@ -298,15 +298,56 @@ Defined in `SUMMARY_GROUPS`. Column matchers split the cell on commas, so a
 `Department` of `"Finance, FLG"` belongs to both FLG and G&A.
 
 ```text
-FLG          Department contains FLG
+FLG          roster tab "FLG" — hand-maintained email list (see below)
 Mumbai       Location = Mumbai
 Coimbatore   Location = Coimbatore
+Bengaluru    Location = Bengaluru
 G&A          Department in {People & Culture, Finance, Legal, Admin}
 Managers     PMS Level matches M1 / M2 / M3 ... (see below)
 ```
 
-Matching is normalized (lower-cased, punctuation stripped), so
+Column matching is normalized (lower-cased, punctuation stripped), so
 `People & Culture` == `people&culture`.
+
+### FLG roster tab
+
+FLG is **not a Zoho department** — its members sit across several departments, so
+the Log's `Department` column (which tracks Zoho, see
+[Employee Sync](#employee-sync-from-zoho-org-tree-syncemployeesjs) — a hand-typed
+`FLG` there is overwritten on the next sync) can never name them. Membership is
+maintained by hand on the **`FLG`** tab of the MissionHQ spreadsheet:
+
+```text
+Full Name | Email Address     <- header row; only the email column is read
+```
+
+`match: { type: "roster", sheet: "FLG" }` → `readRosterEmails_()` reads that
+column (header found by candidate name, never by position — `Email Address` /
+`Email ID` / `Email`), lower-cases and de-duplicates it, and the Log rows are
+filtered to those emails. **Adding someone to FLG means adding a row here**;
+nothing else picks them up.
+
+Roster emails with no MissionHQ Log row are **logged by name** (`not found in
+MissionHQ Log`) rather than silently dropped — check the execution log if a
+group looks short. An empty or column-less roster tab throws, which skips only
+the FLG post; the other groups still go out.
+
+Why it changed: the 1–15 August 2026 FLG snapshot went out with **one person in
+it**, because the Department matcher only ever found rows whose Zoho department
+literally read `FLG`.
+
+A throwaway `FixFlgSnapshot.js` rebuilt that fortnight from the roster and
+`chat.update`d the message already in the channel — 24 ranked members, ts
+`1786857318.521859`, corrected 2026-08-19. It has served its purpose and was
+deleted. If a snapshot ever needs correcting again: rebuild via
+`readMissionHqSnapshot_` → `resolveGroupMembers_` → `computeMemberMetrics_` →
+`buildSnapshotMessage_` for a **pinned** period, find the message by its own
+fallback text (`<Group> attendance — <label>`) through `conversations.history`,
+and `chat.update` it with the summary bot's token. Reuse the group's snapshot
+number rather than advancing it, and re-`saveScores_` afterwards so the next
+delta baseline is the corrected one. The corrected message showed **no deltas**:
+the bad send had overwritten July's baseline with its own period, and
+`readPreviousScores_` will not diff a period against itself.
 
 ### PMS Level column and the Managers group
 
