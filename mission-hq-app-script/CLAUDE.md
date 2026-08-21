@@ -409,10 +409,22 @@ casually:
 ```text
 prompted    = working days − days no prompt was sent
 available   = prompted − leave − WFA within entitlement
-True WFO    = WFO days ÷ available days     (the ranking metric)
+adherent    = office days + WFH days that fell on a Wednesday
+Standard    = adherent ÷ available days     (the ranking metric)
+Office only = office days ÷ available days  (reported, not ranked on)
 CI rate     = checked-in days ÷ available days
-WFO quality = WFO days ÷ checked-in days
+WFO quality = office days ÷ checked-in days
 ```
+
+**Wednesday WFH counts in full.** Wednesday is the *default WFH day*, not a day
+off, so a Wednesday at home is the policy working as designed and scores like an
+office day: four office days plus a Wednesday at home is **100%, not 80%**. This
+was got wrong twice — first by ignoring the weekday entirely, then by treating
+off-Wednesday WFH as a tier gate on top of a percentage that still punished the
+Wednesday itself (Vani, 2026-08-21: *"Why we added Wednesday as WFO condition? it
+is default WFH only right?"*). WFH on any **other** weekday is the miss: it stays
+in the denominator and out of the numerator. There are no carve-outs — the WFH
+half of a Split Day is judged by its weekday like any other WFH.
 
 Day weights (`STATUS_DAY_WEIGHTS` / `statusDayWeights_`, keys pre-normalized).
 **A day is not all-or-nothing** — half days split across two buckets, and each
@@ -443,23 +455,33 @@ from the report entirely (logged by name) rather than ranked at 0% — which is
 what dragged the FLG numbers down in August 2026. New joiners are no longer
 punished for the days before they arrived.
 
-Tiers, ranked by True WFO Adherence (CI rate breaks ties):
+Tiers. **The top two are day counts, not percentages** (`summaryTierKey_`) —
+that is the whole point of the standard, which is about *which* days, not how
+many:
 
 ```text
-S  >=90%   A  80-89%   B  60-79%   C  1-59%   D  0% (check-in not active)
+S  Exceeding   every available day in the office — no WFH taken
+A  Meeting     every available day either in the office or a WFH Wednesday
+B  Good progress   60%+ standard adherence, but short of the standard
+C  Needs attention below 60%
+D  Check-in not active (0%)
 ```
 
-**The Wednesday gate** (PnC spec, Vani, 2026-08-20). Wednesday is the default
-WFH day: "meeting the standard" means four office days *and* the WFH day being a
-Wednesday. So any WFH weight landing on another weekday caps the person at
-`SUMMARY_GATE_TIER` (**B**, Good progress) however high their percentage — a 95%
-fortnight whose half-day WFH fell on a Thursday lands in B. Gated rows are marked
-`*` in the table with a footnote naming the dates, since a 95% row sitting in
-Good progress otherwise reads as a bug. **Split Day is exempt**: half that day
-was spent in the office, so it is not a WFH choice to police. The weekday comes
-from the date header via `isDefaultWfhDay_()`, which builds the Date from parts —
-`new Date("2026-08-19")` parses as UTC and would slip the whole rule by a day in
-IST.
+Anything pending, or any WFH on another weekday, drops you out of S/A — so
+someone can sit in B on 90%. Rows are marked `*` when the weekday choice is the
+*whole* story: every non-office day was WFH, just not on a Wednesday, so moving
+those days to Wednesday would meet the standard. Someone who also has pending
+days is deliberately not marked — their gap is checking in, not which day they
+were home.
+
+Ranking is standard adherence, then check-in rate, then **available days**, so
+ten days at 100% outrank one day at 100% (someone on WFA or leave for nine of
+ten days can otherwise top the table on a single office day — watch for thin
+denominators).
+
+The weekday comes from the date header via `isDefaultWfhDay_()`, which builds the
+Date from parts — `new Date("2026-08-19")` parses as UTC and would slip the whole
+rule by a day in IST.
 
 Members with `available == 0` (on leave the whole period) are **not ranked** —
 they are listed in a separate one-line note instead of being dumped into tier D

@@ -137,10 +137,10 @@ const STATUS_DAY_WEIGHTS = {
   leave:              { leave: 1 }
 };
 
-// Wednesday is the default WFH day. WFH weight landing on any other weekday is
-// "off-Wednesday" and caps the person at Good progress, however high their
-// percentage (see assignSummaryTiers_). Split Day is exempt: half that day was
-// spent in the office, so it is not a WFH choice to police.
+// Wednesday is the DEFAULT WFH day, not a day off. A Wednesday spent at home is
+// the policy working as designed, so it counts towards the standard exactly
+// like an office day — four office days plus a Wednesday at home is a full
+// score, not 80%. WFH weight landing on any other weekday is the miss.
 const DEFAULT_WFH_WEEKDAY = 3; // Date.getDay(): 0 Sunday ... 3 Wednesday
 
 // Each employee is entitled to at most this many WFA days per calendar year.
@@ -148,17 +148,22 @@ const WFA_ANNUAL_CAP = 10;
 // Everything else — including a blank cell — counts as Pending: a day that
 // cannot be credited as presence.
 
-// Ranked by True WFO Adherence. D is "never checked in once" (0%).
+// The top two tiers are defined in DAYS, not percentages (PnC spec, Vani,
+// 2026-08-20): "Exceeding" is reporting to office every day, "Meeting" is four
+// office days a week with the fifth taken as WFH on Wednesday. A percentage
+// cannot express that — 90% is Exceeding if it is 9 office days out of 9
+// available, and only Meeting if the tenth day was a Wednesday at home. The
+// remaining tiers stay percentage-graded, ordered worst-case last.
 const SUMMARY_TIERS = [
-  { key: "S", min: 90, emoji: ":large_green_circle:", label: "Exceeding the standard — ≥90%" },
-  { key: "A", min: 80, emoji: ":large_blue_circle:", label: "Meeting the standard — 80–89%, WFH on Wednesday only" },
-  { key: "B", min: 60, emoji: ":large_yellow_circle:", label: "Good progress — 60–79%, or WFH outside Wednesday" },
+  { key: "S", min: null, emoji: ":large_green_circle:", label: "Exceeding the standard — in office every day" },
+  { key: "A", min: null, emoji: ":large_blue_circle:", label: "Meeting the standard — office 4 days, WFH on Wednesday only" },
+  { key: "B", min: 60, emoji: ":large_yellow_circle:", label: "Good progress — 60%+, but short of the standard" },
   { key: "C", min: 1, emoji: ":large_orange_circle:", label: "Needs attention — below 60%" },
   { key: "D", min: 0, emoji: ":red_circle:", label: "Check-in not active" }
 ];
 
-// The best tier anyone with off-Wednesday WFH can reach.
-const SUMMARY_GATE_TIER = "B";
+// Day counts are halves, so compare them with a tolerance rather than ===.
+const SUMMARY_DAY_EPSILON = 0.01;
 
 // Movement thresholds for the delta annotations.
 const SUMMARY_DELTA_BOLD_PP = 10;
@@ -236,7 +241,7 @@ function logDetailedAudit(groupKey) {
       Logger.log(`  Available=${fmtDays_(member.available)} (${snapshot.dateColumns.length} - ${member.notPrompted} not prompted - ${fmtDays_(member.leave)} leave - ${fmtDays_(member.wfa)} WFA)`);
       Logger.log(`  WFH on Wednesday=${fmtDays_(member.wfhOnWednesday)}, off Wednesday=${fmtDays_(member.wfhOffWednesday)}${member.offWednesdayDays.length ? ` (${member.offWednesdayDays.join(", ")})` : ""}`);
       if (member.prompted === 0) Logger.log("  NOT IN THE REPORT — no prompt reached them this period");
-      Logger.log(`  True Adherence: ${fmtDays_(member.wfo)}/${fmtDays_(member.available)} = ${member.trueAdh}%`);
+      Logger.log(`  Standard adherence: ${fmtDays_(member.adherent)}/${fmtDays_(member.available)} = ${member.standardAdh}% (office-only ${member.wfoAdh}%)`);
       Logger.log(`  CI Rate: ${fmtDays_(member.checkedIn)}/${fmtDays_(member.available)} = ${member.ciRate}%`);
       member.days.forEach(day => Logger.log(
         `    ${day.date}${snapshot.dateColumns.filter(c => c.date === day.date)[0].isDefaultWfhDay ? " (Wed)" : ""}: ` +
@@ -679,9 +684,9 @@ function computeMemberMetrics_(members, snapshot, groupKey, period) {
       pending += weights.pending;
       notPrompted += weights.notPrompted;
 
-      // Split Day is exempt — half of it was spent in the office, so it is not
-      // a WFH choice to police.
-      if (weights.wfh > 0 && !weights.split) {
+      // Every WFH day is judged by its weekday, including the WFH half of a
+      // Split Day. No carve-outs: one rule is what makes this explainable.
+      if (weights.wfh > 0) {
         if (column.isDefaultWfhDay) {
           wfhOnWednesday += weights.wfh;
         } else {
@@ -718,12 +723,18 @@ function computeMemberMetrics_(members, snapshot, groupKey, period) {
     // stays in, and is a check-in (they did respond) but not office.
     const available = prompted - leave - wfaWithin;
     const checkedIn = wfo + wfh + wfaOverCap;
-    const trueAdh = available > 0 ? Math.round((wfo / available) * 100) : 0;
+    // Wednesday WFH is the sanctioned default day, so it counts towards the
+    // standard exactly like an office day — four office days plus a Wednesday
+    // at home IS the standard, and must not score 80%. WFH on any other
+    // weekday is the miss.
+    const adherent = wfo + wfhOnWednesday;
+    const standardAdh = available > 0 ? Math.round((adherent / available) * 100) : 0;
+    const wfoAdh = available > 0 ? Math.round((wfo / available) * 100) : 0;
     const ciRate = available > 0 ? Math.round((checkedIn / available) * 100) : 0;
     const wfoQuality = checkedIn > 0 ? Math.round((wfo / checkedIn) * 100) : null;
 
     const previous = previousScores[name];
-    const delta = previous === undefined ? null : trueAdh - previous;
+    const delta = previous === undefined ? null : standardAdh - previous;
 
     return {
       name: name,
@@ -741,7 +752,9 @@ function computeMemberMetrics_(members, snapshot, groupKey, period) {
       offWednesdayDays: offWednesdayDays,
       available: available,
       checkedIn: checkedIn,
-      trueAdh: trueAdh,
+      adherent: adherent,
+      standardAdh: standardAdh,
+      wfoAdh: wfoAdh,
       ciRate: ciRate,
       wfoQuality: wfoQuality,
       delta: delta,
@@ -749,7 +762,13 @@ function computeMemberMetrics_(members, snapshot, groupKey, period) {
     };
   });
 
-  results.sort((a, b) => (b.trueAdh !== a.trueAdh ? b.trueAdh - a.trueAdh : b.ciRate - a.ciRate));
+  // Adherence, then check-in rate, then the number of days the percentage was
+  // earned over — so ten days at 100% outrank one day at 100%.
+  results.sort((a, b) => {
+    if (b.standardAdh !== a.standardAdh) return b.standardAdh - a.standardAdh;
+    if (b.ciRate !== a.ciRate) return b.ciRate - a.ciRate;
+    return b.available - a.available;
+  });
   return results;
 }
 
@@ -816,27 +835,53 @@ function assignSummaryTiers_(results) {
     members: []
   }));
 
-  const gateFloor = SUMMARY_TIERS.map(tier => tier.key).indexOf(SUMMARY_GATE_TIER);
+  const keys = SUMMARY_TIERS.map(tier => tier.key);
 
   results.forEach(member => {
-    let index = SUMMARY_TIERS.length - 1;
-    for (let i = 0; i < SUMMARY_TIERS.length; i++) {
-      if (member.trueAdh >= SUMMARY_TIERS[i].min) {
-        index = i;
-        break;
-      }
-    }
-
-    member.gatedOffWednesday = false;
-    if (gateFloor !== -1 && index < gateFloor && member.wfhOffWednesday > 0) {
-      index = gateFloor;
-      member.gatedOffWednesday = true;
-    }
-
-    tiers[index].members.push(member);
+    const key = summaryTierKey_(member);
+    // Marked only when the weekday choice is the WHOLE story: every day they
+    // were not in the office was a WFH day, just not a Wednesday. Move those to
+    // Wednesday and they meet the standard. Someone who also has pending days
+    // is not marked — their gap is checking in, not which day they were home.
+    member.missedOnOffWednesday =
+      key !== "S" && key !== "A" &&
+      member.wfhOffWednesday > 0 &&
+      Math.abs(member.adherent + member.wfhOffWednesday - member.available) < SUMMARY_DAY_EPSILON;
+    tiers[keys.indexOf(key)].members.push(member);
   });
 
   return tiers;
+}
+
+/**
+ * S and A are day counts, not percentages:
+ *
+ *   S  every available day in the office — the 5-day week, no WFH taken
+ *   A  every available day either in the office or a WFH Wednesday — the
+ *      4-days-plus-Wednesday week. Nothing pending, nothing at home on
+ *      another weekday.
+ *
+ * Below that, grade what is left by standard adherence. A person can therefore
+ * sit in B on 90% (say, one Monday at home) while someone on 100% of a shorter
+ * available window sits in S — which is the point: the standard is about which
+ * days, not how many.
+ */
+function summaryTierKey_(member) {
+  if (member.available <= 0) return "D";
+
+  const allDaysAccountedFor =
+    Math.abs(member.adherent - member.available) < SUMMARY_DAY_EPSILON;
+
+  if (allDaysAccountedFor) {
+    return member.wfhOnWednesday > 0 ? "A" : "S";
+  }
+
+  for (let i = 0; i < SUMMARY_TIERS.length; i++) {
+    if (SUMMARY_TIERS[i].min !== null && member.standardAdh >= SUMMARY_TIERS[i].min) {
+      return SUMMARY_TIERS[i].key;
+    }
+  }
+  return SUMMARY_TIERS[SUMMARY_TIERS.length - 1].key;
 }
 
 // ---------------------------------------------------------------------------
@@ -879,7 +924,7 @@ function readPreviousScores_(groupKey, period) {
 
 function saveScores_(groupKey, results, period) {
   const scores = {};
-  results.forEach(member => { scores[member.name] = member.trueAdh; });
+  results.forEach(member => { scores[member.name] = member.standardAdh; });
   try {
     PropertiesService.getScriptProperties().setProperty(
       SUMMARY_SCORES_PROPERTY_PREFIX + groupKey,
@@ -964,14 +1009,19 @@ function buildSnapshotMessage_(group, ranked, tiers, fullPeriodLeave, snapshot, 
   // would count days nobody was ever asked about against the pending rate.
   const totalSlots = sumBy_(ranked, member => member.prompted);
 
-  const orgTrueAdh = totalAvailable > 0 ? Math.round((totalWfo / totalAvailable) * 100) : 0;
+  const totalAdherent = sumBy_(ranked, member => member.adherent);
+  const totalWedWfh = sumBy_(ranked, member => member.wfhOnWednesday);
+  const totalOffWedWfh = sumBy_(ranked, member => member.wfhOffWednesday);
+
+  const orgAdh = totalAvailable > 0 ? Math.round((totalAdherent / totalAvailable) * 100) : 0;
+  const orgWfoAdh = totalAvailable > 0 ? Math.round((totalWfo / totalAvailable) * 100) : 0;
   const orgCi = totalAvailable > 0 ? Math.round((totalCheckedIn / totalAvailable) * 100) : 0;
   const orgPendingPct = totalSlots > 0 ? Math.round((totalPending / totalSlots) * 100) : 0;
 
   const tierS = tiers.filter(tier => tier.key === "S")[0];
   const tierA = tiers.filter(tier => tier.key === "A")[0];
   const tierD = tiers.filter(tier => tier.key === "D")[0];
-  const at80Plus = tierS.members.length + tierA.members.length;
+  const meetingCount = tierS.members.length + tierA.members.length;
 
   const orgDelta = orgDelta_(ranked);
   const blocks = [];
@@ -994,20 +1044,19 @@ function buildSnapshotMessage_(group, ranked, tiers, fullPeriodLeave, snapshot, 
     type: "section",
     text: {
       type: "mrkdwn",
-      text: `*True WFO Adherence*\n\`${bar_(orgTrueAdh)}\`  *${orgTrueAdh}%*${orgDelta}`
+      text: `*Standard adherence*\n\`${bar_(orgAdh)}\`  *${orgAdh}%*${orgDelta}`
     }
   });
   blocks.push({
     type: "section",
     fields: [
-      { type: "mrkdwn", text: `*Check-in rate*\n${orgCi}%` },
-      { type: "mrkdwn", text: `*Pending days*\n${orgPendingPct}%` },
-      // Not "80%+" alone any more — the Wednesday gate is part of the standard,
-      // so a 90% person with Monday WFH is deliberately not in this count.
-      { type: "mrkdwn", text: `*Meeting the standard*\n${at80Plus} of ${totalMembers} (80%+, WFH on Wed only)` },
-      { type: "mrkdwn", text: `*Days counted*\n${fmtDays_(totalWfo)} WFO of ${fmtDays_(totalAvailable)} available` },
-      { type: "mrkdwn", text: `*WFA days*\n${fmtDays_(totalWfa)} (tracked separately)` },
-      { type: "mrkdwn", text: `*Wednesday discipline*\n${wednesdayLine_(ranked)}` }
+      { type: "mrkdwn", text: `*Meeting the standard*\n${meetingCount} of ${totalMembers} people` },
+      { type: "mrkdwn", text: `*Days counted*\n${fmtDays_(totalAdherent)} of ${fmtDays_(totalAvailable)} available` },
+      { type: "mrkdwn", text: `*In the office*\n${orgWfoAdh}% of available days` },
+      { type: "mrkdwn", text: `*WFH on Wednesday*\n${fmtDays_(totalWedWfh)} days (counts in full)` },
+      { type: "mrkdwn", text: `*WFH on other days*\n${fmtDays_(totalOffWedWfh)} days (does not count)` },
+      { type: "mrkdwn", text: `*Check-in rate*\n${orgCi}%  ·  ${orgPendingPct}% pending` },
+      { type: "mrkdwn", text: `*WFA days*\n${fmtDays_(totalWfa)} (tracked separately)` }
     ]
   });
 
@@ -1017,7 +1066,9 @@ function buildSnapshotMessage_(group, ranked, tiers, fullPeriodLeave, snapshot, 
     type: "section",
     text: {
       type: "mrkdwn",
-      text: "*Stack ranking*\n_Ranked by True WFO Adherence — WFO days ÷ available days._"
+      text:
+        "*Stack ranking*\n_Ranked by standard adherence — (office days + WFH Wednesdays) " +
+        "÷ available days._"
     }
   });
 
@@ -1042,15 +1093,15 @@ function buildSnapshotMessage_(group, ranked, tiers, fullPeriodLeave, snapshot, 
     });
   });
 
-  const gated = ranked.filter(member => member.gatedOffWednesday);
-  if (gated.length > 0) {
+  const offWed = ranked.filter(member => member.missedOnOffWednesday);
+  if (offWed.length > 0) {
     blocks.push({
       type: "context",
       elements: [{
         type: "mrkdwn",
         text:
-          `_* WFH outside Wednesday — capped at Good progress: ` +
-          `${gated.map(member => `${member.name} (${member.offWednesdayDays.join(", ")})`).join("; ")}._`
+          "_* Would be meeting the standard if these WFH days had been Wednesdays: " +
+          `${offWed.map(member => `${member.name} (${member.offWednesdayDays.join(", ")})`).join("; ")}._`
       }]
     });
   }
@@ -1081,8 +1132,8 @@ function buildSnapshotMessage_(group, ranked, tiers, fullPeriodLeave, snapshot, 
         "*Our ask*\n" +
         ":one:  *Check in every morning* — Office, Client, WFH, Travel, Leave, WFA all count. " +
         "5 seconds, every day.\n" +
-        ":two:  *Wednesday is the default WFH day* — WFH on any other day caps you at " +
-        "*Good progress*, however high your percentage.\n" +
+        ":two:  *Wednesday is the default WFH day* — a Wednesday at home counts in full, " +
+        "same as an office day. WFH on any other day does not count.\n" +
         ":three:  *Pending = invisible* — a pending day cannot be credited as office presence, " +
         "even if you were there."
     }
@@ -1111,12 +1162,14 @@ function buildSnapshotMessage_(group, ranked, tiers, fullPeriodLeave, snapshot, 
         "− any day no check-in prompt was sent to you; leave and WFA (up to the 10-day yearly " +
         "entitlement) are excluded, counting neither for nor against you. WFA days beyond " +
         "10/year DO count against adherence  ·  " +
-        "*True WFO Adherence* = WFO days ÷ available days  ·  " +
-        "*WFO* = Office, Client, Client Location, Travel, Office + Client, Compensatory WFH  ·  " +
-        "*WFH* = Home  ·  *Half days split in two*: Split Day = ½ office + ½ home, " +
-        "Half Day Office Leave = ½ office + ½ leave, Half Day WFH Leave = ½ home + ½ leave  ·  " +
-        "*Wednesday* is the default WFH day; WFH on another weekday caps the tier at " +
-        "Good progress (Split Day is exempt)."
+        "*Standard adherence* = (office days + WFH Wednesdays) ÷ available days. Wednesday " +
+        "is the default WFH day, so a Wednesday at home counts in full — four office days " +
+        "plus a Wednesday at home is 100%, not 80%. WFH on any other weekday does not count  ·  " +
+        "*Exceeding* = in the office every available day  ·  *Meeting* = every available day " +
+        "either in the office or a WFH Wednesday  ·  *Office* = Office, Client, Client Location, " +
+        "Travel, Office + Client, Compensatory WFH  ·  *Half days split in two*: Split Day = " +
+        "½ office + ½ home, Half Day Office Leave = ½ office + ½ leave, Half Day WFH Leave = " +
+        "½ home + ½ leave."
     }]
   });
   blocks.push({
@@ -1125,8 +1178,8 @@ function buildSnapshotMessage_(group, ranked, tiers, fullPeriodLeave, snapshot, 
   });
 
   const text =
-    `${group.title} attendance — ${period.label}: ${orgTrueAdh}% WFO adherence, ` +
-    `${at80Plus} of ${totalMembers} meeting the standard`;
+    `${group.title} attendance — ${period.label}: ${orgAdh}% standard adherence, ` +
+    `${meetingCount} of ${totalMembers} meeting the standard`;
 
   return { text: text, blocks: blocks };
 }
@@ -1149,12 +1202,12 @@ function tableRow_(rank, member, tierKey) {
     return `${rankCell}  ${name}  ${"·".repeat(SUMMARY_BAR_WIDTH)}    —   0/${fmtDays_(member.available)}`;
   }
 
-  const pct = `${member.trueAdh}%`.padStart(4);
-  const days = `${fmtDays_(member.wfo)}/${fmtDays_(member.available)}`.padStart(9);
+  const pct = `${member.standardAdh}%`.padStart(4);
+  const days = `${fmtDays_(member.adherent)}/${fmtDays_(member.available)}`.padStart(9);
   // "*" marks a percentage that was capped by the Wednesday rule — without it a
   // 90% row sitting in Good progress looks like a bug.
-  const gate = member.gatedOffWednesday ? " *" : "";
-  return `${rankCell}  ${name}  ${bar_(member.trueAdh)}  ${pct}  ${days}${deltaCell_(member.delta)}${gate}`;
+  const offWed = member.missedOnOffWednesday ? " *" : "";
+  return `${rankCell}  ${name}  ${bar_(member.standardAdh)}  ${pct}  ${days}${deltaCell_(member.delta)}${offWed}`;
 }
 
 function deltaCell_(delta) {
@@ -1196,9 +1249,9 @@ function orgDelta_(ranked) {
   const withDelta = ranked.filter(member => member.delta !== null);
   if (withDelta.length === 0) return "";
   const previousAdh = Math.round(
-    sumBy_(withDelta, member => member.trueAdh - member.delta) / withDelta.length
+    sumBy_(withDelta, member => member.standardAdh - member.delta) / withDelta.length
   );
-  const currentAdh = Math.round(sumBy_(withDelta, member => member.trueAdh) / withDelta.length);
+  const currentAdh = Math.round(sumBy_(withDelta, member => member.standardAdh) / withDelta.length);
   const delta = currentAdh - previousAdh;
   if (delta === 0) return "  _(no change)_";
   return `  _(${delta > 0 ? "▲ +" : "▼ "}${delta}pp vs last snapshot)_`;
