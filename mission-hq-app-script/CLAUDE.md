@@ -407,31 +407,59 @@ Metric definitions — these are the established ones, do not "improve" them
 casually:
 
 ```text
-available   = working days − leave days     (leave fully excluded)
+prompted    = working days − days no prompt was sent
+available   = prompted − leave − WFA within entitlement
 True WFO    = WFO days ÷ available days     (the ranking metric)
 CI rate     = checked-in days ÷ available days
 WFO quality = WFO days ÷ checked-in days
 ```
 
-Status buckets (`classifyAttendanceStatus_`, matched normalized):
+Day weights (`STATUS_DAY_WEIGHTS` / `statusDayWeights_`, keys pre-normalized).
+**A day is not all-or-nothing** — half days split across two buckets, and each
+status's weights sum to 1:
 
 ```text
-WFO      Office, Client Location, Split Day, Travel, Anywhere, Office + Client
-WFH      Home
-LEAVE    Leave                       -> removed from the denominator entirely
-PENDING  "Pending" AND blank cells    -> "pending = invisible"
+1.0 WFO              Office, Client, Client Location, Travel, Office + Client,
+                     Compensatory WFH (comp for weekend work, not a WFH choice)
+1.0 WFH              Home
+1.0 WFA              Anywhere        -> capped entitlement, tracked separately
+1.0 LEAVE            Leave           -> removed from the denominator entirely
+0.5 WFO + 0.5 WFH    Split Day
+0.5 WFO + 0.5 LEAVE  Half Day Office Leave
+0.5 WFH + 0.5 LEAVE  Half Day WFH Leave
+PENDING              literal "Pending" -> "pending = invisible", counts against
+NOTPROMPTED          blank cell        -> leaves the denominator, see below
 ```
 
-A **blank cell counts as Pending**, deliberately: a day with no check-in cannot
-be credited as presence. Note the side effect — someone who joined mid-period
-has blanks for the days before they arrived and will score low. Watch for this
-when a new hire's first snapshot looks bad.
+Counters are therefore **fractional**; `fmtDays_()` renders `9.5` / `10` (never
+`10.0`) everywhere a day count is shown.
+
+**Blank ≠ Pending.** The prompt flow writes `"Pending"` only after a DM actually
+goes out (`ProcessData.js`), so a blank cell means no prompt reached that person
+that day — a deactivated Slack account, a `WFO Exempt` row, or someone who had
+not joined yet. Those days leave their denominator; a literal `"Pending"` still
+counts against them. Anyone with **zero prompted days** in the period is dropped
+from the report entirely (logged by name) rather than ranked at 0% — which is
+what dragged the FLG numbers down in August 2026. New joiners are no longer
+punished for the days before they arrived.
 
 Tiers, ranked by True WFO Adherence (CI rate breaks ties):
 
 ```text
 S  >=90%   A  80-89%   B  60-79%   C  1-59%   D  0% (check-in not active)
 ```
+
+**The Wednesday gate** (PnC spec, Vani, 2026-08-20). Wednesday is the default
+WFH day: "meeting the standard" means four office days *and* the WFH day being a
+Wednesday. So any WFH weight landing on another weekday caps the person at
+`SUMMARY_GATE_TIER` (**B**, Good progress) however high their percentage — a 95%
+fortnight whose half-day WFH fell on a Thursday lands in B. Gated rows are marked
+`*` in the table with a footnote naming the dates, since a 95% row sitting in
+Good progress otherwise reads as a bug. **Split Day is exempt**: half that day
+was spent in the office, so it is not a WFH choice to police. The weekday comes
+from the date header via `isDefaultWfhDay_()`, which builds the Date from parts —
+`new Date("2026-08-19")` parses as UTC and would slip the whole rule by a day in
+IST.
 
 Members with `available == 0` (on leave the whole period) are **not ranked** —
 they are listed in a separate one-line note instead of being dumped into tier D
