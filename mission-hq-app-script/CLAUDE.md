@@ -435,6 +435,11 @@ status's weights sum to 1:
                      Compensatory WFH (comp for weekend work, not a WFH choice)
 1.0 WFH              Home
 1.0 WFA              Anywhere        -> capped entitlement, tracked separately
+                     WFA_ANNUAL_CAP days/calendar year (15 since 2026-08-21,
+                     previously 10). Days within the cap are neutral like
+                     leave; every day beyond it stays in the denominator and
+                     is not credited as office. Read the constant — the number
+                     is never spelled out in a message or log line.
 1.0 LEAVE            Leave           -> removed from the denominator entirely
 0.5 WFO + 0.5 WFH    Split Day
 0.5 WFO + 0.5 LEAVE  Half Day Office Leave

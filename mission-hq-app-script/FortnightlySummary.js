@@ -112,7 +112,8 @@ const SUMMARY_GROUPS = [
 // Matched after normalizing, so "Office + Client" == "office+client".
 // Classification per People & Culture spec (Vani, 2026-08-10).
 // WFA ("Anywhere") is tracked SEPARATELY from WFO/WFH — it is a capped annual
-// entitlement (10 days/year), so it neither helps nor hurts office adherence.
+// entitlement (WFA_ANNUAL_CAP days/year), so within that allowance it neither
+// helps nor hurts office adherence.
 //
 // A day is not always all-or-nothing: half days split across two buckets
 // (PnC spec, Vani, 2026-08-20). Split Day is half in the office and half at
@@ -144,7 +145,9 @@ const STATUS_DAY_WEIGHTS = {
 const DEFAULT_WFH_WEEKDAY = 3; // Date.getDay(): 0 Sunday ... 3 Wednesday
 
 // Each employee is entitled to at most this many WFA days per calendar year.
-const WFA_ANNUAL_CAP = 10;
+// Raised from 10 to 15 by PnC on 2026-08-21. Every message and log line reads
+// this constant — do not spell the number out anywhere else.
+const WFA_ANNUAL_CAP = 15;
 // Everything else — including a blank cell — counts as Pending: a day that
 // cannot be credited as presence.
 
@@ -634,15 +637,17 @@ function normalizeSummaryKey_(value) {
 // ---------------------------------------------------------------------------
 
 /**
- * One row per member, ranked by True WFO Adherence (CI rate breaks ties).
+ * One row per member, ranked by standard adherence (CI rate breaks ties).
  *
- *   available   = working days − leave − WFA-within-entitlement
- *   True WFO    = WFO days ÷ available days              (the ranking metric)
+ *   available   = prompted days − leave − WFA-within-entitlement
+ *   adherent    = office days + WFH days that fell on a Wednesday
+ *   Standard    = adherent ÷ available days              (the ranking metric)
  *   CI rate     = checked-in days ÷ available days
  *
  * WFA (Work From Anywhere) is excluded from the denominator ONLY up to the
- * 10-day annual entitlement. A person's first 10 WFA days of the year are
- * neutral, like leave. Every WFA day beyond the 10th is over-entitlement: it
+ * annual entitlement (WFA_ANNUAL_CAP). A person's first WFA days of the year up
+ * to that cap are neutral, like leave. Every WFA day beyond it is
+ * over-entitlement: it
  * stays in the denominator and is NOT counted as office, so it drags adherence
  * down — which is the point, since that person is over their cap. Whether a
  * period's WFA days are within the allowance is decided by how many WFA days the
@@ -697,7 +702,7 @@ function computeMemberMetrics_(members, snapshot, groupKey, period) {
     });
 
     // Year-to-date WFA for this row, across every date column in the year up to
-    // the period end — this is the running total the 10-day cap applies to.
+    // the period end — this is the running total the annual cap applies to.
     let wfaYtd = 0;
     (snapshot.ytdDateColumns || []).forEach(column => {
       const raw = row[column.index] ? row[column.index].toString().trim() : "";
@@ -1159,9 +1164,9 @@ function buildSnapshotMessage_(group, ranked, tiers, fullPeriodLeave, snapshot, 
       type: "mrkdwn",
       text:
         `*How this is calculated*  ·  *Available days* = ${workingDays} working days − leave − WFA ` +
-        "− any day no check-in prompt was sent to you; leave and WFA (up to the 10-day yearly " +
-        "entitlement) are excluded, counting neither for nor against you. WFA days beyond " +
-        "10/year DO count against adherence  ·  " +
+        `− any day no check-in prompt was sent to you; leave and WFA (up to the ${WFA_ANNUAL_CAP}-day ` +
+        "yearly entitlement) are excluded, counting neither for nor against you. WFA days beyond " +
+        `${WFA_ANNUAL_CAP}/year DO count against adherence  ·  ` +
         "*Standard adherence* = (office days + WFH Wednesdays) ÷ available days. Wednesday " +
         "is the default WFH day, so a Wednesday at home counts in full — four office days " +
         "plus a Wednesday at home is 100%, not 80%. WFH on any other weekday does not count  ·  " +
