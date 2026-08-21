@@ -1002,7 +1002,9 @@ function buildSnapshotMessage_(group, ranked, tiers, fullPeriodLeave, snapshot, 
     fields: [
       { type: "mrkdwn", text: `*Check-in rate*\n${orgCi}%` },
       { type: "mrkdwn", text: `*Pending days*\n${orgPendingPct}%` },
-      { type: "mrkdwn", text: `*Meeting the 4-day standard*\n${at80Plus} of ${totalMembers} (80%+)` },
+      // Not "80%+" alone any more — the Wednesday gate is part of the standard,
+      // so a 90% person with Monday WFH is deliberately not in this count.
+      { type: "mrkdwn", text: `*Meeting the standard*\n${at80Plus} of ${totalMembers} (80%+, WFH on Wed only)` },
       { type: "mrkdwn", text: `*Days counted*\n${fmtDays_(totalWfo)} WFO of ${fmtDays_(totalAvailable)} available` },
       { type: "mrkdwn", text: `*WFA days*\n${fmtDays_(totalWfa)} (tracked separately)` },
       { type: "mrkdwn", text: `*Wednesday discipline*\n${wednesdayLine_(ranked)}` }
