@@ -194,6 +194,105 @@ The interactive submit path is split so each responsibility has exactly one owne
   `department` / `location` are forwarded for later use but currently ignored by
   `doPost`.
 
+### Answers stay editable
+
+The confirmation **keeps the dropdown and the button**, with the current answer
+pre-selected and the button relabelled **Update**. Picking again and clicking
+Update rewrites the cell. There is no time limit: it works today, tomorrow, or on
+a prompt from last month.
+
+There is deliberately **no "you can change this" instruction line**. A first cut
+shipped one and it was removed the same day: the controls sitting directly below
+already say it, and this DM goes to the whole org every working day, so a
+standing instruction is three lines of noise on every confirmation forever.
+
+Nothing else was needed to make that true — `updateLocationByEmailID` already
+overwrites the cell unconditionally, and the button `value` already carries the
+prompt's own date, so a re-submit lands on the right day by construction. The
+only thing missing was the control, which `updateSlackMessage` used to throw
+away by replacing every block with one line of text.
+
+The resting state is **just an Edit button** — the picker is not left expanded.
+This DM goes to the whole org every working day and the answer is usually right,
+so a permanent dropdown is a row of clutter on every confirmation forever. Edit
+costs one extra click on the rare occasion someone changes their mind.
+
+### The option list rides inside the button value
+
+Rebuilding the picker needs the options, and a confirmation has no select left to
+read them from. The first cut fetched them back through a new Apps Script
+`?action=locations` endpoint — and clicking Edit then took **3.3–4.5 seconds**,
+essentially all of it Apps Script cold start (`time_namelookup` and
+`time_connect` were ~6 ms; it is not transport).
+
+So they are not fetched. At the moment of submitting, the message being answered
+*still carries its select*, so `optionsFromMessage()` lifts the options straight
+off it and `packEditValue()` packs them into the Edit button's own `value`:
+
+```text
+submit_location_<date>_<fact> | <url-encoded meta> | <option list JSON>
+```
+
+Clicking Edit is then pure `chat.update` — no network beyond Slack. The real
+list packs to ~700 of Slack's 2000 characters, leaving room for roughly 20 more
+statuses; past the `EDIT_VALUE_MAX` budget the options are dropped and
+`showLocationPicker()` falls back to fetching, so an over-long Locations sheet
+degrades to slow rather than broken. `URLSearchParams` percent-encodes `|` as
+`%7C`, so the segment separators are never ambiguous.
+
+`?action=locations` (`WebApp.js`) is therefore a **fallback path, not the hot
+path**. Keep it: it is also what a value packed before this existed falls back
+to. The Locations sheet stays the only place the list is defined.
+
+The picker's own Submit button carries no option list (`stripOptions()`) — the
+select sitting on that message is where the next confirmation reads them from.
+`initial_option` must be the object from `options`, since Slack matches it on
+text *and* value; the one echoed back in `selected_option` is not safe to reuse.
+
+### Update with nothing changed just collapses
+
+Clicking Update without picking something different records nothing and simply
+puts the Edit button back (`collapseToEdit()`) — no sheet write, no profile call,
+no Apps Script round trip. The message text already names what is on record, so
+it is purely a re-render.
+
+This covers two cases at once: re-picking the answer already stored, and never
+opening the select at all. **Slack does not reliably report an untouched
+`initial_option` in `state.values`**, so `selectedOption()` comes back empty and
+the old code returned silently — leaving the picker sitting open, looking stuck,
+until the person actually changed something.
+
+The guard is `meta.status`, which only exists once an answer has been recorded.
+An untouched *original* prompt therefore still falls through to the silent
+return, instead of collapsing into a confirmation for an answer nobody gave.
+
+One consequence worth knowing: re-submitting an identical answer is no longer a
+way to retry a sheet write that failed. The 20:00 `fixMissedResponses()` sweep is
+what recovers those.
+
+Two things that look incidental but are not:
+
+- **The Fun Fact stays last in the text, and `extractFunFact()` captures a single
+  line, not to the end of the string.** Once the confirmation carries a fact of
+  its own, a greedy match reads the next edit's fact plus everything after it,
+  and the fact grows on every edit. This was latent before — with no controls
+  there was never a second edit to trigger it.
+- **`chat.update` sends `text:` without the fact** — it is only the notification
+  fallback, and leaving the fact out of it keeps exactly one copy in the message
+  for the next edit to read.
+
+Known gaps, both deliberate:
+
+- **The Slack profile status does not follow an edit.** `updateSlackProfileStatus`
+  is today-only *and* never overwrites an existing status, so changing Office →
+  Home leaves the earlier status in place. Fixing it means overwriting statuses
+  people may have set by hand, which is the thing that check exists to prevent.
+- **Confirmations sent before this shipped stay frozen** — their controls were
+  already replaced with plain text, and nothing in the payload can bring them
+  back. A one-off backfill could re-render them (walk `Messages TS`, rebuild the
+  actions block from `getLocationsList()`, `chat.update`); see the removed
+  `BackfillConfirmations.js` note above for the shape.
+
 ### `isToday` message-update bug (fixed)
 
 The July 2 refactor originally wrapped `updateSlackMessage` in an
@@ -936,12 +1035,38 @@ a daily morning trigger once validated. Not wired into the prompt/reminder flow.
 
 ## Apps Script Deployment
 
-Push Apps Script changes:
+### `clasp push` alone does NOT reach production
+
+There are two deployments:
+
+```text
+AKfycbwsyyNG…   @HEAD    requires a Google sign-in — NOT the production URL
+AKfycbwRblOL…   @49      anonymous, version-pinned — this is what /exec serves
+```
+
+The web app the Supabase function posts to (`MISSION_HQ_APPS_SCRIPT_URL`) is the
+**version-pinned** one. `clasp push` only updates HEAD, and HEAD is behind a
+sign-in wall, so a pushed change is invisible to production until a new version
+is cut and that deployment is moved onto it:
 
 ```bash
-cd mission-hq-app-script
 clasp push
+clasp create-version "<what changed>"
+clasp deploy --deploymentId '<PROD_DEPLOYMENT_ID>' --versionNumber '<new version>'
 ```
+
+Verify against the live URL, not the logs — an anonymous GET is the quickest
+proof of what production is actually running:
+
+```bash
+curl -L -s '<APPS_SCRIPT_WEB_APP_EXEC_URL>?action=locations' | head -c 200
+```
+
+This was found on 2026-09-01: `?action=locations` had been pushed and still
+returned the old "Invalid action" list from v49. Anything pushed but never
+versioned since v49 ships the moment the next version is cut — check what is
+actually on HEAD before promoting, rather than assuming it is only your change.
+Rollback is re-running `clasp deploy` against the previous version number.
 
 List deployments:
 

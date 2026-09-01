@@ -35,8 +35,16 @@ function doGet(e) {
       case "summary":
         result = getSummaryData();
         break;
+      // The dropdown options, for the edge function's "Edit" button. Once a
+      // prompt has been answered the confirmation carries no select any more,
+      // so the option list has to be fetched to rebuild the picker. Served from
+      // here rather than hardcoded in the edge function so the Locations sheet
+      // stays the only place the list lives.
+      case "locations":
+        result = { success: true, locations: getLocationsList() };
+        break;
       default:
-        result = { error: "Invalid action. Use: all, today, daterange, departments, analytics, summary, zohoPeopleAuthUrl, syncZohoPeopleLeaves, syncZohoAttendance" };
+        result = { error: "Invalid action. Use: all, today, daterange, departments, analytics, summary, locations, zohoPeopleAuthUrl, syncZohoPeopleLeaves, syncZohoAttendance" };
     }
 
     return ContentService.createTextOutput(JSON.stringify(result))
