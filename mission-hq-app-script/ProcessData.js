@@ -276,8 +276,31 @@ function processPendingEmailsAndSendSlackReminder() {
     }
     const exemptColIndex = exemptCol.index;
 
+    // The pre-send DM check costs one conversations.history call per pending
+    // person on top of the reminder itself, and this loop already sleeps a
+    // second per row. On a day with hundreds of Pending cells that is enough to
+    // run into the 6-minute execution cap, which would leave the tail of the
+    // sheet with no reminder at all. So the check is given a budget: past it,
+    // the remaining rows are reminded the way they were before this existed.
+    // The nightly sweep still repairs anything it would have caught.
+    const reminderStarted = Date.now();
+    const REMINDER_DM_CHECK_BUDGET_MS = 3.5 * 60 * 1000;
+    let dmCheckSkippedForTime = 0;
+
+    // Read once per run: the Locations tab, mapped label -> sheet value, so a
+    // confirmation found in Slack can be written back byte-identically to what
+    // the live submit path would have written.
+    let labelMap = null;
+    try {
+      labelMap = buildLocationLabelMap_();
+    } catch (labelMapError) {
+      Logger.log(`Could not build the location label map — pre-reminder DM check disabled: ${labelMapError.message}`);
+    }
+
     let sentCount = 0;
     let failedCount = 0;
+    const recovered = [];      // answered in Slack, sheet repaired here, no reminder sent
+    const answeredNoLabel = []; // answered in Slack but the label is unusable
     for (let i = 1; i < data.length; i++) {
       const row = data[i];
       if (exemptColIndex !== -1 && isWfoExempt_(row[exemptColIndex])) {
@@ -326,6 +349,54 @@ function processPendingEmailsAndSendSlackReminder() {
               sheet.getRange(i + 1, dmColIndex + 1).setValue(dmChannel); // cache for next run
             }
           }
+
+          // "Pending" in the sheet is not proof the person did not answer — it
+          // is only proof the sheet never got the answer. When the submit path
+          // dies after the edge function has already shown the confirmation
+          // (see RecoverMissedResponses.js), the cell stays Pending while the
+          // person is looking at "Thank you for your update!", and the reminder
+          // reads as the bot losing their response. Reported by Chethan on
+          // 2026-09-08: answered 10:23, nagged 14 minutes later, and the
+          // nightly sweep repaired the cell afterwards.
+          //
+          // So ask Slack before nagging. Their DM is the source of truth: if a
+          // confirmation for today is sitting there, repair the cell now and
+          // stay quiet. Best-effort — if the lookup fails the reminder still
+          // goes out, because a missing reminder is worse than a stray one.
+          if (labelMap && Date.now() - reminderStarted > REMINDER_DM_CHECK_BUDGET_MS) {
+            dmCheckSkippedForTime++;
+          } else if (labelMap) {
+            const answer = findDmAnswerForDate_(slackId, dmChannel, todayDate, labelMap);
+            if (!answer.ok) {
+              Logger.log(`Row ${i + 1}: DM check failed (${answer.error}) — reminding anyway`);
+            } else if (answer.answered && answer.value) {
+              const cell = sheet.getRange(i + 1, dateColIndex + 1);
+              cell.setValue(answer.value);
+              cell.setNote(
+                `Recovered from the Slack DM confirmation (answered ${answer.confirmedAt}).\n` +
+                `Label: ${answer.label}\nBackfilled before the reminder run.`
+              );
+              SpreadsheetApp.flush();
+              logToDumpSheet(
+                `Reminder run recovered a lost response: ${email} ${todayDate} -> ${answer.value} ` +
+                `(confirmed in Slack at ${answer.confirmedAt})`
+              );
+              Logger.log(`Row ${i + 1}: ${email} already answered "${answer.label}" at ${answer.confirmedAt} — cell repaired, no reminder`);
+              recovered.push({ name: name, email: email, value: answer.value, confirmedAt: answer.confirmedAt });
+              Utilities.sleep(500); // this row skips the send, but it still called Slack
+              continue;
+            } else if (answer.answered) {
+              // They answered, but the confirmation does not name a usable
+              // option (an old message with no label, or wording the Locations
+              // tab no longer has). Nothing to write — but they DID answer, so
+              // nagging them is exactly the complaint this check exists to fix.
+              Logger.log(`Row ${i + 1}: ${email} answered at ${answer.confirmedAt} but the label is unusable (${answer.reason}) — no reminder, left Pending`);
+              answeredNoLabel.push({ name: name, email: email, label: answer.label, reason: answer.reason, confirmedAt: answer.confirmedAt });
+              Utilities.sleep(500);
+              continue;
+            }
+          }
+
           const result = sendLocationReminder_(slackId, dmChannel, todayDate, email);
           if (result.success) {
             Logger.log(`Reminder to ${email}: ${result.message}`);
@@ -347,11 +418,25 @@ function processPendingEmailsAndSendSlackReminder() {
       }
     }
 
-    Logger.log(`Email processing completed: ${sentCount} sent, ${failedCount} failed`);
+    Logger.log(
+      `Email processing completed: ${sentCount} sent, ${failedCount} failed, ` +
+      `${recovered.length} recovered before reminding, ${answeredNoLabel.length} answered but unrecoverable`
+    );
+    if (dmCheckSkippedForTime > 0) {
+      Logger.log(
+        `Pre-send DM check ran out of budget: ${dmCheckSkippedForTime} row(s) were reminded without it. ` +
+        `The nightly sweep still covers them.`
+      );
+    }
+    alertRemindersSuppressedByDmCheck_(todayDate, recovered, answeredNoLabel);
+
     return {
       success: true,
       sent: sentCount,
-      failed: failedCount
+      failed: failedCount,
+      recovered: recovered.length,
+      answeredNoLabel: answeredNoLabel.length,
+      dmCheckSkipped: dmCheckSkippedForTime
     };
   } catch (error) {
     Logger.log(`Error processing emails: ${error.message}`);
@@ -359,6 +444,48 @@ function processPendingEmailsAndSendSlackReminder() {
       success: false,
       message: `Error processing emails: ${error.message}`
     };
+  }
+}
+
+/**
+ * One alert per reminder run, not one per person: during a bad burst this can
+ * be dozens of rows, and the point is that the submit path dropped responses at
+ * all — the names are the evidence, not the headline.
+ *
+ * Silent when nothing was recovered, which is the normal day.
+ */
+function alertRemindersSuppressedByDmCheck_(date, recovered, answeredNoLabel) {
+  if (recovered.length === 0 && answeredNoLabel.length === 0) return;
+
+  try {
+    const lines = [];
+    if (recovered.length > 0) {
+      lines.push(`These people had already answered in Slack while the sheet still said \`Pending\`. The cell was repaired and no reminder was sent.`);
+      lines.push("");
+      recovered.forEach(item => {
+        lines.push(`• *${item.name || item.email}* — ${date} → \`${item.value}\`  _(answered ${item.confirmedAt})_`);
+      });
+    }
+    if (answeredNoLabel.length > 0) {
+      if (lines.length) lines.push("");
+      lines.push(`${answeredNoLabel.length} more answered but their confirmation does not name a usable option, so the cell is still \`Pending\` and needs a manual ask:`);
+      answeredNoLabel.forEach(item => {
+        lines.push(`• *${item.name || item.email}* — _(answered ${item.confirmedAt}; ${item.reason})_`);
+      });
+    }
+    lines.push("");
+    lines.push("_Found by the reminder run's pre-send DM check. Recovery is automatic; this alert exists so the underlying submit-path failure does not stay invisible._");
+
+    sendErrorAlert(
+      `${recovered.length} attendance response(s) were lost by the submit path and recovered before reminding`,
+      {
+        functionName: 'processPendingEmailsAndSendSlackReminder',
+        sheetName: CANDIDATE_SHEET_NAME,
+        additionalInfo: lines.join("\n"),
+      }
+    );
+  } catch (alertError) {
+    Logger.log(`Failed to send the reminder-suppression alert: ${alertError.message}`);
   }
 }
 
