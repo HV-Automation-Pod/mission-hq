@@ -267,7 +267,8 @@ An untouched *original* prompt therefore still falls through to the silent
 return, instead of collapsing into a confirmation for an answer nobody gave.
 
 One consequence worth knowing: re-submitting an identical answer is no longer a
-way to retry a sheet write that failed. The 20:00 `fixMissedResponses()` sweep is
+way to retry a sheet write that failed. The reminder run's pre-send DM check and
+the nightly `fixMissedResponses()` sweep are
 what recovers those.
 
 Two things that look incidental but are not:
@@ -312,6 +313,60 @@ MissionHQ Log, fetch the DM via `conversations.history`, skip if it already
 starts with "Thank you for your update", else `chat.update`. Needs bot scopes
 `im:history` + `im:write`, and honor Slack `Retry-After` on 429s (batch history
 once per channel, not per message).
+
+## Lost Responses: the two safety nets (`RecoverMissedResponses.js`)
+
+The edge function shows the confirmation **before** Apps Script writes the sheet,
+so any failure in that last leg leaves the person looking at "Thank you for your
+update!" over a cell that still says `Pending`. Two jobs catch it, and both treat
+**the Slack DM as the source of truth** for what was answered.
+
+### 1. The reminder run asks Slack before nagging
+
+`processPendingEmailsAndSendSlackReminder()` no longer trusts `Pending` on its
+own. For each pending row it calls `findDmAnswerForDate_()` — one bounded
+`conversations.history` read of that person's DM for today's confirmation:
+
+- **Confirmation found, label resolvable** → the cell is repaired from it (with a
+  note recording where the value came from), and **no reminder is sent**.
+- **Confirmation found, label unusable** → still no reminder; they answered. The
+  cell stays `Pending` and the person is named in the alert for a manual ask.
+- **Nothing found, or the lookup failed** → the reminder goes out as before. A
+  missing reminder is worse than a stray one.
+
+Everything recovered in a run is reported as **one** `#automation-alerts` message
+(`alertRemindersSuppressedByDmCheck_`), not one per person — during a bad burst
+that can be dozens of rows, and the story is that the submit path dropped
+responses at all.
+
+Why it exists: Chethan answered at 10:23 on 2026-09-08 and was nagged in-thread
+14 minutes later; the sweep repaired the cell that night. Being reminded after
+answering reads as the bot losing your response, and it is the complaint that
+reaches PnC.
+
+The check costs one extra Slack call per pending row on top of a loop that
+already sleeps a second per row, so it runs under a **3.5-minute budget**
+(`REMINDER_DM_CHECK_BUDGET_MS`). Past that, the remaining rows are reminded
+without it rather than risking the 6-minute execution cap — the tail of the sheet
+getting no reminder at all would be the worse failure. The nightly sweep still
+covers whatever the budget skipped.
+
+### 2. The nightly sweep
+
+`dailyMissedResponseSweep()` runs on a daily trigger at **~00:00–01:00 IST**
+(`createMissedResponseSweepTrigger`, `atHour(0)`), when the day is over and every
+submission and edit for it has landed.
+
+It scans a fixed **three-day window — today, yesterday and the day before**
+(`MISSED_SCAN_SWEEP_DAY_COUNT`), bounded at both ends. Because it fires just
+after midnight, today's date column does not exist yet (the prompt flow creates
+it around 10 AM); that column is simply absent and skipped, so in practice the
+sweep repairs the **two finished days**. Anything older needs a manual
+`previewMissedResponses(from, to)` / `fixMissedResponses(from, to)` run.
+
+It alerts on three things: rows it repaired, rows that answered but could not be
+recovered, and **its own failure to finish** — a safety net that fails quietly is
+the exact problem it exists to solve.
 
 ## Daily Prompt Content: Messages & Trivia (with low-trivia alert)
 

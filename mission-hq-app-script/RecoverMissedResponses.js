@@ -63,10 +63,16 @@ const MISSED_SCAN_DUMP_ROWS = 30000;
 const MISSED_SCAN_CONFIRMATION_RE =
   /We received your response\s*(?:\*([^*]+)\*)?\s*for\s+(\d{4}-\d{2}-\d{2})/;
 
-// Days back the daily self-healing sweep looks. Small on purpose: it must
-// finish inside one Apps Script execution, and anything older is caught by a
-// manual previewMissedResponses()/fixMissedResponses() run.
-const MISSED_SCAN_SWEEP_DAYS = 4;
+// How many calendar days the daily self-healing sweep covers, counting today
+// as one of them: today, yesterday and the day before. Small on purpose — it
+// must finish inside one Apps Script execution, and anything older is caught by
+// a manual previewMissedResponses()/fixMissedResponses() run.
+//
+// The trigger fires just after midnight IST, so "today" has no date column yet
+// (the prompt flow creates it around 10 AM). That column is simply absent and
+// skipped, which is why the window counts three days rather than two: it is the
+// two finished days that actually get repaired.
+const MISSED_SCAN_SWEEP_DAY_COUNT = 3;
 
 // doPost's own DUMP breadcrumbs.
 const MISSED_SCAN_DUMP_REQUEST_RE =
@@ -100,7 +106,8 @@ function fixMissedResponses(fromDate, toDate) {
  * DAILY SAFETY NET — wire this to a time-based trigger (see
  * createMissedResponseSweepTrigger).
  *
- * Re-checks only the last few days, silently repairs any response that Slack
+ * Re-checks a fixed three-day window — today, yesterday and the day before
+ * (MISSED_SCAN_SWEEP_DAY_COUNT) — silently repairs any response that Slack
  * confirmed but the sheet lost, and posts to #automation-alerts whenever it had
  * to repair something. This is what turns a silent data loss into a visible one:
  * whatever
@@ -111,13 +118,23 @@ function fixMissedResponses(fromDate, toDate) {
  * full historical backfill.
  */
 function dailyMissedResponseSweep() {
+  const today = new Date();
+  const toDate = Utilities.formatDate(today, "Asia/Kolkata", "yyyy-MM-dd");
   const from = new Date();
-  from.setDate(from.getDate() - MISSED_SCAN_SWEEP_DAYS);
+  from.setDate(from.getDate() - (MISSED_SCAN_SWEEP_DAY_COUNT - 1));
   const fromDate = Utilities.formatDate(from, "Asia/Kolkata", "yyyy-MM-dd");
 
   let result;
   try {
-    result = runMissedResponseScan_({ dryRun: false, fromDate: fromDate, ignoreCursor: true });
+    // Bounded at BOTH ends: the sweep is a fixed three-day window, never the
+    // whole sheet. An unbounded upper end would also pull in any date column
+    // that happens to sit in the future.
+    result = runMissedResponseScan_({
+      dryRun: false,
+      fromDate: fromDate,
+      toDate: toDate,
+      ignoreCursor: true
+    });
   } catch (error) {
     // A sweep that cannot run is itself worth an alert — otherwise the safety
     // net fails silently, which is the exact problem it exists to solve.
@@ -136,7 +153,7 @@ function dailyMissedResponseSweep() {
       {
         functionName: 'dailyMissedResponseSweep',
         sheetName: CANDIDATE_SHEET_NAME,
-        additionalInfo: buildSweepAlert_(result, fromDate),
+        additionalInfo: buildSweepAlert_(result, fromDate, toDate),
       }
     );
   }
@@ -152,7 +169,7 @@ function dailyMissedResponseSweep() {
       additionalInfo:
         `Checked up to sheet row ${result.lastRow} of ${result.totalRows}; rows after that were ` +
         `not swept today. Anything lost below that row is still \`Pending\`. ` +
-        `Run \`fixMissedResponses('${fromDate}')\` to finish the job.`,
+        `Run \`fixMissedResponses('${fromDate}', '${toDate}')\` to finish the job.`,
     });
   }
 
@@ -168,13 +185,16 @@ function createMissedResponseSweepTrigger() {
   });
   ScriptApp.newTrigger("dailyMissedResponseSweep")
     .timeBased()
-    .atHour(20) // well after the day's prompts, reminders and submissions
+    // Just after midnight: the day is over, so every submission and edit for it
+    // has landed. Apps Script picks a minute inside the hour, i.e. 00:00-01:00.
+    .atHour(0)
     .everyDays(1)
+    .inTimezone("Asia/Kolkata")
     .create();
-  Logger.log("Daily missed-response sweep trigger created for ~20:00 IST.");
+  Logger.log("Daily missed-response sweep trigger created for ~00:00-01:00 IST.");
 }
 
-function buildSweepAlert_(result, fromDate) {
+function buildSweepAlert_(result, fromDate, toDate) {
   const lines = [
     `These people answered in Slack but the sheet still said \`Pending\`. Restored from their DM confirmation.`,
     ""
@@ -190,7 +210,7 @@ function buildSweepAlert_(result, fromDate) {
   }
 
   lines.push("");
-  lines.push(`_Scanned ${fromDate} onward. Recovery is automatic; this alert exists so the underlying failure does not stay invisible._`);
+  lines.push(`_Scanned ${fromDate} to ${toDate}. Recovery is automatic; this alert exists so the underlying failure does not stay invisible._`);
   return lines.join("\n");
 }
 
@@ -625,6 +645,72 @@ function readDmConfirmations_(slackUserId, oldestDate) {
   }
 
   return { ok: true, byDate: byDate, channel: channel.id };
+}
+
+/**
+ * ONE date, ONE user: did they already answer in Slack for `date`, even though
+ * the sheet still says "Pending"?
+ *
+ * This is the cheap version of readDmConfirmations_(), for the afternoon
+ * reminder flow to call before nagging someone. It reads a single bounded
+ * window of the DM instead of paging back to the oldest pending date, so it
+ * costs one conversations.history call per pending person and no pagination.
+ *
+ * Why the window is the prompt's own day: the confirmation is a chat.update of
+ * the prompt message itself, so it carries the prompt's timestamp, not the
+ * moment of answering. 36 hours of slack covers a late-running prompt.
+ *
+ * @param {string} slackId    the employee's Slack user id
+ * @param {string} dmChannel  cached DM channel id; opened on demand when blank
+ * @param {string} date       yyyy-MM-dd, matched against the date named INSIDE
+ *                            the confirmation text, not the message time
+ * @param {Object} labelMap   from buildLocationLabelMap_(), built once per run
+ * @return {{ok: boolean, answered: boolean, label: string, value: string,
+ *           confirmedAt: string, reason: string, error: string}}
+ */
+function findDmAnswerForDate_(slackId, dmChannel, date, labelMap) {
+  const blank = { ok: true, answered: false, label: "", value: "", confirmedAt: "", reason: "", error: "" };
+
+  let channel = (dmChannel || "").toString().trim();
+  if (!channel) {
+    const opened = openDmChannel_(slackId);
+    if (!opened.ok) return { ok: false, answered: false, label: "", value: "", confirmedAt: "", reason: "", error: opened.error };
+    channel = opened.id;
+  }
+
+  const oldest = Math.floor(new Date(`${date}T00:00:00+05:30`).getTime() / 1000);
+  const latest = oldest + 36 * 60 * 60;
+  const url =
+    `https://slack.com/api/conversations.history?channel=${encodeURIComponent(channel)}` +
+    `&limit=200&oldest=${oldest}&latest=${latest}`;
+
+  const json = slackGet_(url);
+  if (!json.ok) {
+    return { ok: false, answered: false, label: "", value: "", confirmedAt: "", reason: "", error: json.error || "history_failed" };
+  }
+
+  let best = null;
+  (json.messages || []).forEach(message => {
+    const match = (message.text || "").toString().match(MISSED_SCAN_CONFIRMATION_RE);
+    // The date INSIDE the message is what the answer is for — a backfilled
+    // prompt is answered on a different day than it records against.
+    if (!match || match[2] !== date) return;
+    const ts = parseFloat(message.ts || "0");
+    if (!best || ts > best.ts) best = { label: (match[1] || "").trim(), ts: ts };
+  });
+
+  if (!best) return blank;
+
+  const resolved = resolveLabelToSheetValue_(best.label, labelMap);
+  return {
+    ok: true,
+    answered: true,
+    label: best.label,
+    value: resolved.value,
+    confirmedAt: formatSlackTs_(best.ts),
+    reason: resolved.reason,
+    error: ""
+  };
 }
 
 function openDmChannel_(slackUserId) {

@@ -278,7 +278,7 @@ function alertSheetWriteFailure_(email, date, status, reason) {
       additionalInfo:
         `First affected: \`${email || 'unknown'}\` on \`${date || 'unknown'}\` ` +
         `(response \`${status || 'unknown'}\`). The cell still shows \`Pending\`. ` +
-        `The 20:00 sweep recovers it from the Slack DM, or run \`fixMissedResponses()\` now.`,
+        `The nightly sweep recovers it from the Slack DM, or run \`fixMissedResponses()\` now.`,
     });
   } catch (alertError) {
     // Never let alerting break the request path.
