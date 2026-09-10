@@ -202,6 +202,15 @@ function processEmailsAndSendSlackMessage() {
 }
 
 
+// How long the reminder run may spend on its pre-send DM check before giving up
+// on it and reminding the remaining rows the old way. Sized against Apps
+// Script's 6-minute execution cap, with room for the reminders themselves.
+//
+// Measured from the top of the loop, not the top of the function — the sheet
+// read and the getOrCreateColumnIndex_ calls before it cost a few seconds that
+// this budget does not see. The margin is wide enough that it does not matter.
+const REMINDER_DM_CHECK_BUDGET_MS = 3.5 * 60 * 1000;
+
 function processPendingEmailsAndSendSlackReminder() {
   if (isWeekend() || isHoliday()) {
     console.log("Today is a weekend or holiday. No messages will be sent.");
@@ -284,7 +293,6 @@ function processPendingEmailsAndSendSlackReminder() {
     // the remaining rows are reminded the way they were before this existed.
     // The nightly sweep still repairs anything it would have caught.
     const reminderStarted = Date.now();
-    const REMINDER_DM_CHECK_BUDGET_MS = 3.5 * 60 * 1000;
     let dmCheckSkippedForTime = 0;
 
     // Read once per run: the Locations tab, mapped label -> sheet value, so a
@@ -383,17 +391,29 @@ function processPendingEmailsAndSendSlackReminder() {
               );
               Logger.log(`Row ${i + 1}: ${email} already answered "${answer.label}" at ${answer.confirmedAt} — cell repaired, no reminder`);
               recovered.push({ name: name, email: email, value: answer.value, confirmedAt: answer.confirmedAt });
-              Utilities.sleep(500); // this row skips the send, but it still called Slack
+              // This row skips the send, but it still called conversations.history
+              // — Tier 3, ~50/min. Pace it exactly like the sweep does. At 500ms
+              // a burst of recoveries runs at ~100/min and earns a 429, and a
+              // single Retry-After on Tier 3 is 30-60s: three of those eat the
+              // whole budget below, and the day the check matters most is the
+              // day it would switch itself off.
+              Utilities.sleep(MISSED_SCAN_SLACK_PAUSE_MS);
               continue;
             } else if (answer.answered) {
               // They answered, but the confirmation does not name a usable
               // option (an old message with no label, or wording the Locations
-              // tab no longer has). Nothing to write — but they DID answer, so
-              // nagging them is exactly the complaint this check exists to fix.
-              Logger.log(`Row ${i + 1}: ${email} answered at ${answer.confirmedAt} but the label is unusable (${answer.reason}) — no reminder, left Pending`);
+              // tab no longer has), so there is nothing to write into the cell.
+              //
+              // The reminder still goes out. Staying quiet here would leave the
+              // cell on "Pending", and Pending is NOT neutral: the fortnightly
+              // summary counts it in the denominator and not in the numerator,
+              // so silence would cost them a day in a published ranking. The
+              // nightly sweep cannot rescue it either — it resolves labels
+              // through the same map and fails identically. Asking again is the
+              // only thing that actually fixes the day, and it is a genuinely
+              // different situation from "we already have your answer".
+              Logger.log(`Row ${i + 1}: ${email} answered at ${answer.confirmedAt} but the label is unusable (${answer.reason}) — reminding so the cell can be filled`);
               answeredNoLabel.push({ name: name, email: email, label: answer.label, reason: answer.reason, confirmedAt: answer.confirmedAt });
-              Utilities.sleep(500);
-              continue;
             }
           }
 
@@ -452,6 +472,10 @@ function processPendingEmailsAndSendSlackReminder() {
  * be dozens of rows, and the point is that the submit path dropped responses at
  * all — the names are the evidence, not the headline.
  *
+ * The counts live in the body rather than the title. sendErrorAlert dedupes on
+ * function + message, so a number in the title would make every run a distinct
+ * alert and defeat the 30-minute cooldown.
+ *
  * Silent when nothing was recovered, which is the normal day.
  */
 function alertRemindersSuppressedByDmCheck_(date, recovered, answeredNoLabel) {
@@ -460,7 +484,7 @@ function alertRemindersSuppressedByDmCheck_(date, recovered, answeredNoLabel) {
   try {
     const lines = [];
     if (recovered.length > 0) {
-      lines.push(`These people had already answered in Slack while the sheet still said \`Pending\`. The cell was repaired and no reminder was sent.`);
+      lines.push(`${recovered.length} person(s) had already answered in Slack while the sheet still said \`Pending\`. The cell was repaired and no reminder was sent.`);
       lines.push("");
       recovered.forEach(item => {
         lines.push(`• *${item.name || item.email}* — ${date} → \`${item.value}\`  _(answered ${item.confirmedAt})_`);
@@ -468,7 +492,12 @@ function alertRemindersSuppressedByDmCheck_(date, recovered, answeredNoLabel) {
     }
     if (answeredNoLabel.length > 0) {
       if (lines.length) lines.push("");
-      lines.push(`${answeredNoLabel.length} more answered but their confirmation does not name a usable option, so the cell is still \`Pending\` and needs a manual ask:`);
+      lines.push(
+        `${answeredNoLabel.length} answered in Slack, but their confirmation does not name an option ` +
+        `we can read back, so there was nothing to write. They were reminded — an untouched \`Pending\` ` +
+        `would count against them in the fortnightly report. Worth checking the Locations tab if the ` +
+        `same wording keeps appearing:`
+      );
       answeredNoLabel.forEach(item => {
         lines.push(`• *${item.name || item.email}* — _(answered ${item.confirmedAt}; ${item.reason})_`);
       });
@@ -476,14 +505,18 @@ function alertRemindersSuppressedByDmCheck_(date, recovered, answeredNoLabel) {
     lines.push("");
     lines.push("_Found by the reminder run's pre-send DM check. Recovery is automatic; this alert exists so the underlying submit-path failure does not stay invisible._");
 
-    sendErrorAlert(
-      `${recovered.length} attendance response(s) were lost by the submit path and recovered before reminding`,
-      {
-        functionName: 'processPendingEmailsAndSendSlackReminder',
-        sheetName: CANDIDATE_SHEET_NAME,
-        additionalInfo: lines.join("\n"),
-      }
-    );
+    // Title the alert after whatever actually happened. It fires on either list,
+    // so a fixed "N recovered" headline would post "0 attendance response(s)
+    // were lost" over a body about people who could not be recovered.
+    const title = recovered.length > 0
+      ? `Attendance responses were lost by the submit path and recovered before reminding`
+      : `Attendance responses were confirmed in Slack but cannot be read back`;
+
+    sendErrorAlert(title, {
+      functionName: 'processPendingEmailsAndSendSlackReminder',
+      sheetName: CANDIDATE_SHEET_NAME,
+      additionalInfo: lines.join("\n"),
+    });
   } catch (alertError) {
     Logger.log(`Failed to send the reminder-suppression alert: ${alertError.message}`);
   }

@@ -331,15 +331,27 @@ own. For each pending row it calls `findDmAnswerForDate_()` — one bounded
 
 - **Confirmation found, label resolvable** → the cell is repaired from it (with a
   note recording where the value came from), and **no reminder is sent**.
-- **Confirmation found, label unusable** → still no reminder; they answered. The
-  cell stays `Pending` and the person is named in the alert for a manual ask.
+- **Confirmation found, label unusable** → the reminder **still goes out**, and
+  the person is named in the alert. There is nothing to write into the cell, and
+  `Pending` is not neutral: the fortnightly summary counts it in the denominator
+  and not in the numerator, so staying quiet would cost them a day in a published
+  ranking. The nightly sweep cannot rescue it either — it resolves labels through
+  the same map and fails identically. Asking again is the only thing that fixes
+  the day, and it is a different situation from "we already have your answer".
 - **Nothing found, or the lookup failed** → the reminder goes out as before. A
   missing reminder is worse than a stray one.
 
 Everything recovered in a run is reported as **one** `#automation-alerts` message
 (`alertRemindersSuppressedByDmCheck_`), not one per person — during a bad burst
 that can be dozens of rows, and the story is that the submit path dropped
-responses at all.
+responses at all. Counts stay in the alert **body**: `sendErrorAlert` dedupes on
+function + message, so a number in the title would make every run a distinct
+alert and defeat the 30-minute cooldown.
+
+Both branches that call Slack pace at `MISSED_SCAN_SLACK_PAUSE_MS` (1200 ms), the
+same as the sweep — `conversations.history` is Tier 3 (~50/min), and a single
+`Retry-After` on Tier 3 is 30–60 s, enough for a few of them to eat the budget
+below and switch the check off on precisely the day it matters.
 
 Why it exists: Chethan answered at 10:23 on 2026-09-08 and was nagged in-thread
 14 minutes later; the sweep repaired the cell that night. Being reminded after
@@ -531,9 +543,23 @@ somebody actually maintains — people are added to it when they become a manage
 - `conversations.members` is tried with the attendance bot first, then the HV
   Automation bot — for a private channel only a member app can list it, and the
   HV Automation bot is the one already posting there.
-- The refresh runs automatically at the top of `runSummariesForPeriod_()` for
-  every run that posts (best-effort; a failure leaves the previous roster in
-  place). Dry runs skip it, keeping their "writes nothing" promise.
+- The refresh runs inside `runSummariesForPeriod_()` **after** the Log snapshot
+  is read, so it can reuse that already-read grid instead of reading a ~350-row
+  sheet twice in one run.
+- **Test runs refresh it too.** The tab is a derived cache rebuilt from Slack,
+  not the score/snapshot state that testing must not disturb — and a test that
+  reports a different set of people than the real send would is not testing the
+  real send. Only `previewScheduledSummaries()` skips it, since a dry run writes
+  nothing at all by definition.
+- A failed refresh is **alerted**, not just logged: the summary still posts, but
+  against a roster from last time, and "silently short report" is the exact
+  failure this replaces. Unresolved channel members are alerted too — a bot in
+  the list is expected, a person is a missing row in a published ranking.
+- `users.info` for members the Log does not know always uses the **attendance
+  bot**, never whichever token read the channel. The fallback token is the HV
+  Automation bot, which has no `users:read.email`, and the members needing the
+  lookup are the recent hires — dropping them would be a smaller copy of the bug
+  this replaces.
 
 ### PMS Level column
 

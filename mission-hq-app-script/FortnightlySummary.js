@@ -288,12 +288,6 @@ function runSummariesForPeriod_(period, options) {
     Logger.log(`TEST MODE: all groups post to ${testChannelId}; no state will be written.`);
   }
 
-  // Mirror the managers Slack channel into its roster tab first, so the report
-  // reflects who is in that channel today. Skipped on dry runs, which promise to
-  // write nothing. Best-effort: a Slack failure leaves the previous roster in
-  // place rather than killing the whole run.
-  if (!dryRun) refreshManagersRosterBestEffort_();
-
   let snapshot;
   try {
     snapshot = readMissionHqSnapshot_(period.start, period.end);
@@ -307,6 +301,23 @@ function runSummariesForPeriod_(period, options) {
     const message = `No date columns found between ${period.start} and ${period.end} — nothing to summarize.`;
     Logger.log(message);
     return { success: false, message: message };
+  }
+
+  // Mirror the managers Slack channel into its roster tab, so the report
+  // reflects who is in that channel today rather than who was in it last time.
+  //
+  // AFTER the snapshot, not before: the roster sync needs the Log's Slack User
+  // ID column to resolve members without a users.info call each, and the
+  // snapshot has that grid already read. Passing it saves a second full read of
+  // a ~350-row sheet with every date column ever on it.
+  //
+  // Test runs DO refresh it. The roster tab is a derived cache rebuilt from
+  // Slack, not the delta/snapshot state that testing must not disturb, and a
+  // test that reports a different set of people than the real send would is not
+  // testing the real send. Only dry runs skip it, since they write nothing at
+  // all by definition.
+  if (!dryRun) {
+    refreshManagersRosterBestEffort_({ headers: snapshot.headers, rows: snapshot.rows });
   }
 
   SUMMARY_GROUPS.forEach(group => {

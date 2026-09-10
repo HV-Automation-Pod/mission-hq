@@ -50,7 +50,7 @@ const MANAGERS_MEMBERS_MAX_PAGES = 10;
  * @return {{success: boolean, members: number, matched: number,
  *           lookedUp: number, skipped: number, message: string}}
  */
-function syncManagersRosterFromSlack() {
+function syncManagersRosterFromSlack(preReadLog) {
   const channelId = getManagersChannelId_();
   const fetched = fetchSlackChannelMemberIds_(channelId);
   if (!fetched.ok) {
@@ -58,7 +58,7 @@ function syncManagersRosterFromSlack() {
   }
   Logger.log(`Managers channel ${channelId}: ${fetched.ids.length} member(s) reported by Slack.`);
 
-  const bySlackId = buildLogIndexBySlackId_();
+  const bySlackId = buildLogIndexBySlackId_(preReadLog);
   const rows = [];
   const seenEmails = {};
   const skipped = [];
@@ -79,7 +79,18 @@ function syncManagersRosterFromSlack() {
     } else {
       // Not in the Log by Slack id — either a new hire whose id has not been
       // cached yet, or a bot. users.info settles both.
-      const info = fetchSlackUserForRoster_(slackId, fetched.token);
+      //
+      // ALWAYS the attendance bot, never fetched.token. That token is whichever
+      // one could read the channel, and the whole reason the fallback exists is
+      // a private channel the attendance bot cannot see — in exactly that case
+      // fetched.token is the HV Automation bot, which holds chat:write and
+      // chat:write.customize and NOT users:read.email. Every lookup would come
+      // back missing_scope and drop the member, and the people needing the
+      // lookup are the recent hires whose Slack id the Log has not cached yet.
+      // Dropping them quietly is a smaller copy of the 22-of-62 bug this file
+      // exists to fix. users.info needs no channel access, so the attendance
+      // bot can answer it whether or not it is in the channel.
+      const info = fetchSlackUserForRoster_(slackId, SLACK_BOT_TOKEN);
       lookedUp++;
       if (!info.ok) {
         skipped.push(`${slackId} (${info.error})`);
@@ -113,6 +124,22 @@ function syncManagersRosterFromSlack() {
 
   if (skipped.length > 0) {
     Logger.log(`Managers roster: ${skipped.length} member(s) skipped — ${skipped.join(", ")}`);
+    // The execution log is where a short Managers report went unnoticed for a
+    // fortnight. A channel member who does not reach the roster is a person
+    // missing from a published ranking, so say it out loud. The count stays OUT
+    // of the title: sendErrorAlert dedupes on function + message, and a varying
+    // number there would defeat the 30-minute cooldown.
+    sendErrorAlert(
+      `Managers roster: some channel members could not be resolved and are missing from the summary`,
+      {
+        functionName: 'syncManagersRosterFromSlack',
+        sheetName: MANAGERS_ROSTER_SHEET_NAME,
+        additionalInfo:
+          `${skipped.length} of ${fetched.ids.length} member(s) of <#${channelId}> were skipped: ` +
+          `${skipped.join(", ")}. Bots are expected here; a real person means the roster — and the ` +
+          `Managers summary — is short by that many people.`,
+      }
+    );
   }
   const message =
     `Managers roster: ${rows.length} written (${matched} from the Log, ${lookedUp} looked up in Slack, ` +
@@ -134,12 +161,25 @@ function syncManagersRosterFromSlack() {
  * Refreshes the roster without letting a Slack failure take the summary run
  * down with it — a stale roster still produces a report, no roster does not.
  */
-function refreshManagersRosterBestEffort_() {
+function refreshManagersRosterBestEffort_(preReadLog) {
   try {
-    return syncManagersRosterFromSlack();
+    return syncManagersRosterFromSlack(preReadLog);
   } catch (error) {
     Logger.log(`Managers roster refresh failed, using the tab as it stands: ${error.message}`);
     logToDumpSheet(`Managers roster refresh failed: ${error.message}`);
+    // Swallowing this is what a silently short report looks like from the
+    // inside: the summary still posts, just against whatever the tab held last
+    // time. Best-effort means the run survives, not that nobody is told.
+    sendErrorAlert(
+      `Managers roster refresh failed — the summary is being built from a stale roster: ${error.message}`,
+      {
+        functionName: 'refreshManagersRosterBestEffort_',
+        sheetName: MANAGERS_ROSTER_SHEET_NAME,
+        additionalInfo:
+          `Anyone added to the managers channel since the last successful sync is missing from ` +
+          `this report. Run *Sync Managers Roster* from the MissionHQ menu and re-send.`,
+      }
+    );
     return { success: false, message: error.message };
   }
 }
@@ -193,6 +233,15 @@ function fetchSlackChannelMemberIds_(channelId) {
       (json.members || []).forEach(id => ids.push(id));
       cursor = (json.response_metadata && json.response_metadata.next_cursor) || "";
       if (!cursor) break;
+
+      // Say so rather than returning a truncated list that reads like a whole
+      // one. The cap is 2000 members, so this should never fire.
+      if (page === MANAGERS_MEMBERS_MAX_PAGES - 1) {
+        Logger.log(
+          `conversations.members hit the ${MANAGERS_MEMBERS_MAX_PAGES}-page cap with more to read — ` +
+          `${ids.length} id(s) collected, the rest are NOT in this roster`
+        );
+      }
     }
 
     if (!failed) return { ok: true, ids: ids, token: tokens[t].token, error: "" };
@@ -204,13 +253,32 @@ function fetchSlackChannelMemberIds_(channelId) {
   return { ok: false, ids: [], token: "", error: lastError };
 }
 
-/** Slack user id -> { name, email } for every Log row that has both. */
-function buildLogIndexBySlackId_() {
-  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CANDIDATE_SHEET_NAME);
-  if (!sheet) throw new Error(`Sheet ${CANDIDATE_SHEET_NAME} not found`);
+/**
+ * Slack user id -> { name, email } for every Log row that has both.
+ *
+ * `preReadLog` is an already-read `{ headers, rows }` of the same grid — the
+ * summary run has one in hand, and the Log is ~350 rows wide by every date
+ * column ever, so reading it twice in one run is pure waste. Anything that is
+ * not that exact shape (a trigger event object, say) is ignored and the sheet is
+ * read here.
+ */
+function buildLogIndexBySlackId_(preReadLog) {
+  const usable = preReadLog &&
+    Array.isArray(preReadLog.headers) &&
+    Array.isArray(preReadLog.rows);
 
-  const data = sheet.getDataRange().getDisplayValues();
-  const headers = data[0].map(header => header.toString().trim());
+  let headers;
+  let bodyRows;
+  if (usable) {
+    headers = preReadLog.headers.map(header => header.toString().trim());
+    bodyRows = preReadLog.rows;
+  } else {
+    const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CANDIDATE_SHEET_NAME);
+    if (!sheet) throw new Error(`Sheet ${CANDIDATE_SHEET_NAME} not found`);
+    const data = sheet.getDataRange().getDisplayValues();
+    headers = data[0].map(header => header.toString().trim());
+    bodyRows = data.slice(1);
+  }
   const nameColIndex = headers.indexOf("Full Name");
   const emailColIndex = headers.indexOf("Email Address");
   const slackIdColIndex = headers.indexOf(SLACK_USER_ID_COLUMN);
@@ -222,7 +290,7 @@ function buildLogIndexBySlackId_() {
     return index;
   }
 
-  data.slice(1).forEach(row => {
+  bodyRows.forEach(row => {
     const slackId = (row[slackIdColIndex] || "").toString().trim();
     const email = (row[emailColIndex] || "").toString().trim();
     if (!slackId || !email) return;
