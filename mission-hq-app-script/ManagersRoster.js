@@ -47,8 +47,8 @@ const MANAGERS_MEMBERS_MAX_PAGES = 10;
  * real summary send, so the fortnightly report never goes out against a stale
  * membership list.
  *
- * @return {{success: boolean, members: number, matched: number,
- *           lookedUp: number, skipped: number, message: string}}
+ * @return {{success: boolean, members: number, matched: number, lookedUp: number,
+ *           bots: number, skipped: number, message: string}}
  */
 function syncManagersRosterFromSlack(preReadLog) {
   const channelId = getManagersChannelId_();
@@ -61,7 +61,13 @@ function syncManagersRosterFromSlack(preReadLog) {
   const bySlackId = buildLogIndexBySlackId_(preReadLog);
   const rows = [];
   const seenEmails = {};
-  const skipped = [];
+  // Bots are kept apart from people on purpose. A channel like this always has
+  // at least one app in it (the HV Automation bot posts the summary there), so
+  // lumping them together would fire the alert below on every single sync — and
+  // an alert that always fires is one nobody reads. A skipped BOT is the system
+  // working; a skipped PERSON is a missing row in a published ranking.
+  const skippedBots = [];
+  const skippedPeople = [];
   let matched = 0;
   let lookedUp = 0;
 
@@ -93,11 +99,17 @@ function syncManagersRosterFromSlack(preReadLog) {
       const info = fetchSlackUserForRoster_(slackId, SLACK_BOT_TOKEN);
       lookedUp++;
       if (!info.ok) {
-        skipped.push(`${slackId} (${info.error})`);
+        // Unknown, so treated as a person: a lookup that failed is exactly the
+        // case worth being told about.
+        skippedPeople.push(`${slackId} (${info.error})`);
         return;
       }
-      if (info.isBot || info.deleted || !info.email) {
-        skipped.push(`${slackId} (${info.isBot ? "bot" : info.deleted ? "deactivated" : "no email"})`);
+      if (info.isBot) {
+        skippedBots.push(slackId);
+        return;
+      }
+      if (info.deleted || !info.email) {
+        skippedPeople.push(`${slackId} (${info.deleted ? "deactivated" : "no email"})`);
         return;
       }
       name = info.name;
@@ -122,8 +134,11 @@ function syncManagersRosterFromSlack(preReadLog) {
   rows.sort((a, b) => a[0].localeCompare(b[0]));
   writeManagersRosterSheet_(rows);
 
-  if (skipped.length > 0) {
-    Logger.log(`Managers roster: ${skipped.length} member(s) skipped — ${skipped.join(", ")}`);
+  if (skippedBots.length > 0) {
+    Logger.log(`Managers roster: ${skippedBots.length} bot(s) in the channel, not rostered — ${skippedBots.join(", ")}`);
+  }
+  if (skippedPeople.length > 0) {
+    Logger.log(`Managers roster: ${skippedPeople.length} member(s) skipped — ${skippedPeople.join(", ")}`);
     // The execution log is where a short Managers report went unnoticed for a
     // fortnight. A channel member who does not reach the roster is a person
     // missing from a published ranking, so say it out loud. The count stays OUT
@@ -135,15 +150,15 @@ function syncManagersRosterFromSlack(preReadLog) {
         functionName: 'syncManagersRosterFromSlack',
         sheetName: MANAGERS_ROSTER_SHEET_NAME,
         additionalInfo:
-          `${skipped.length} of ${fetched.ids.length} member(s) of <#${channelId}> were skipped: ` +
-          `${skipped.join(", ")}. Bots are expected here; a real person means the roster — and the ` +
-          `Managers summary — is short by that many people.`,
+          `${skippedPeople.length} of ${fetched.ids.length} member(s) of <#${channelId}> were skipped: ` +
+          `${skippedPeople.join(", ")}. Each one is a person in the channel who will be missing from ` +
+          `the next Managers summary.`,
       }
     );
   }
   const message =
     `Managers roster: ${rows.length} written (${matched} from the Log, ${lookedUp} looked up in Slack, ` +
-    `${skipped.length} skipped) from ${fetched.ids.length} channel member(s).`;
+    `${skippedBots.length} bot(s), ${skippedPeople.length} skipped) from ${fetched.ids.length} channel member(s).`;
   Logger.log(message);
   logToDumpSheet(message);
 
@@ -152,7 +167,8 @@ function syncManagersRosterFromSlack(preReadLog) {
     members: rows.length,
     matched: matched,
     lookedUp: lookedUp,
-    skipped: skipped.length,
+    bots: skippedBots.length,
+    skipped: skippedPeople.length,
     message: message
   };
 }
