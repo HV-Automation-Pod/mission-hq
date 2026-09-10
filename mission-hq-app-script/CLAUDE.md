@@ -100,7 +100,9 @@ SlackMessage.js    Slack message block builders and send helpers
 UpdateData.js      Slack payload handling and sheet/profile updates
 ZohoPeople.js      Zoho People OAuth and leave sync
 ZohoAttendance.js  Push MissionHQ attendance into Zoho People (bulk import)
-MonthlySummary.js  Fortnightly per-group attendance summaries to Slack channels
+FortnightlySummary.js  Fortnightly per-group attendance summaries to Slack channels
+ManagersRoster.js  Mirrors the managers Slack channel into the "Managers" tab
+RecoverMissedResponses.js  Nightly sweep + the reminder run's pre-send DM check
 WebApp.js          doGet API for dashboard and leave sync endpoints
 GetData.js         Sheet/user lookup helpers
 Analytics.js       Analytics helpers
@@ -402,7 +404,7 @@ Keep facts work-appropriate — the prompt DMs the whole org. This mirrors the
 referral bot's motivational-sentence refill alert (`Slack.js` →
 `REFERRAL_ALERT_USER_ID`) in the `hypertalent-platform/ta-scripts/referral` repo.
 
-## Fortnightly Attendance Summaries (`MonthlySummary.js`)
+## Fortnightly Attendance Summaries (`FortnightlySummary.js`)
 
 Posts an attendance summary to five group Slack channels on the **1st and the
 15th** of each month. Entirely separate from the daily prompt flow.
@@ -457,7 +459,8 @@ Mumbai       Location = Mumbai
 Coimbatore   Location = Coimbatore
 Bengaluru    Location = Bengaluru
 G&A          Department in {People & Culture, Finance, Legal, Admin}
-Managers     PMS Level matches M1 / M2 / M3 ... (see below)
+Managers     roster tab "Managers" — mirrored from the channel's own Slack
+             member list (see below)
 ```
 
 Column matching is normalized (lower-cased, punctuation stripped), so
@@ -503,13 +506,39 @@ delta baseline is the corrected one. The corrected message showed **no deltas**:
 the bad send had overwritten July's baseline with its own period, and
 `readPreviousScores_` will not diff a period against itself.
 
-### PMS Level column and the Managers group
+### Managers roster — the Slack channel is the list
 
-The Managers group reads the MissionHQ Log's own **`PMS Level`** column and takes
-every row matching `/^m\d+$/` after normalizing — so `M1`, `M2`, `M12` are in,
-while `IC 2`, `AM`, `NA` and blanks are out.
+The Managers group's membership is the **member list of its own Slack channel**
+(`C061H34DECA`), mirrored into a machine-owned **`Managers`** tab by
+`syncManagersRosterFromSlack()` (`ManagersRoster.js`, menu: **Sync Managers
+Roster**). The summary then reads that tab through the same `roster` matcher the
+FLG tab uses.
 
-That column is populated from a **separate spreadsheet** (`PMS_MASTER_SHEET_ID`
+It used to select on the Log's `PMS Level` column matching `/^m\d+$/`. That
+column is **empty for most rows**, so the report went out with **22 of the
+channel's 62 people** (Gunjan and Chinmaya, 2026-09-01). The channel is the list
+somebody actually maintains — people are added to it when they become a manager
+— so that is what the group reads.
+
+- Emails come from the Log's own `Slack User ID` column where possible (free,
+  and an exact join); only ids the Log does not know cost a `users.info` call.
+  Bots, deactivated accounts and members with no email are skipped and logged.
+- The tab is **rewritten on every sync** — a hand-typed row does not survive.
+  Add or remove people in the Slack channel instead. A note on cell A1 says so
+  on the sheet itself.
+- A read that resolves to **zero** usable members throws instead of blanking the
+  tab, so a transient Slack failure cannot wipe the roster.
+- `conversations.members` is tried with the attendance bot first, then the HV
+  Automation bot — for a private channel only a member app can list it, and the
+  HV Automation bot is the one already posting there.
+- The refresh runs automatically at the top of `runSummariesForPeriod_()` for
+  every run that posts (best-effort; a failure leaves the previous roster in
+  place). Dry runs skip it, keeping their "writes nothing" promise.
+
+### PMS Level column
+
+`PMS Level` is still synced into the Log, but **no summary group selects on it
+any more**. It is populated from a **separate spreadsheet** (`PMS_MASTER_SHEET_ID`
 property), tab `Master Sheet`, **headers in row 2**, column **`PMS '26 Level`**.
 Note this is the **Level** column, *not* `PMS '26 Rating` — that one holds
 "Consistently Meets" / "Often Exceeds" text and is only kept as a fallback
@@ -530,8 +559,7 @@ run:
   in the log. A row present in PMS with a blank level is cleared, so a demotion
   out of M-level leaves no stale value.
 - Scheduled runs read only the local column and never open the PMS sheet.
-- Re-run the sync when levels change. If the column is missing, only the
-  managers channel is skipped — the other four still post.
+- Re-run the sync when levels change.
 
 ### Message structure and metrics
 
@@ -685,6 +713,8 @@ testFirstHalfSummaries()      // the 16th run (1st-15th), to the test channel, a
 testSecondHalfSummaries()     // the 1st run (16th-month end), to the test channel
 logDetailedAudit(groupKey)    // day-by-day breakdown, logs only
 syncPmsLevelsToLog()          // fills the Log's PMS Level column
+syncManagersRosterFromSlack() // rebuilds the "Managers" tab from Slack
+logManagersRoster()           // logs the tab as it stands, touches no API
 ```
 
 The two test functions exist because each half is otherwise only reproducible on

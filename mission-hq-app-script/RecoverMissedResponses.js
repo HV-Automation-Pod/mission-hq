@@ -721,12 +721,17 @@ function openDmChannel_(slackUserId) {
   return { ok: true, id: response.channel.id };
 }
 
-/** GET with one Retry-After-aware retry on 429. */
-function slackGet_(url) {
+/**
+ * GET with one Retry-After-aware retry on 429.
+ *
+ * `token` defaults to the attendance bot. The managers-roster sync passes a
+ * different one when that bot cannot see the channel.
+ */
+function slackGet_(url, token) {
   for (let attempt = 0; attempt < 3; attempt++) {
     const response = UrlFetchApp.fetch(url, {
       method: "get",
-      headers: { Authorization: `Bearer ${SLACK_BOT_TOKEN}` },
+      headers: { Authorization: `Bearer ${token || SLACK_BOT_TOKEN}` },
       muteHttpExceptions: true
     });
     if (response.getResponseCode() === 429) {
