@@ -40,7 +40,10 @@ const PMS_EMAIL_COLUMNS = ["Email ID", "Email Address", "Email"];
 // holds the Consistently Meets / Often Exceeds text and is only a fallback in
 // case the level values ever move there.
 const PMS_LEVEL_COLUMNS = ["PMS '26 Level", "PMS '26 Rating", "PMS Level"];
-const PMS_MANAGER_LEVEL_PATTERN = /^m\d+$/; // m1, m2, m3 ... after normalizing
+// m1, m2, m3 ... after normalizing. No summary group selects on this any more
+// (the Managers group reads its Slack channel — see ManagersRoster.js); it is
+// kept because syncPmsLevelsToLog() reports how many M-levels it wrote.
+const PMS_MANAGER_LEVEL_PATTERN = /^m\d+$/;
 
 // Column in the MissionHQ Log that the PMS sync writes into, and that the
 // Managers group is matched against.
@@ -100,11 +103,22 @@ const SUMMARY_GROUPS = [
     }
   },
   {
+    // Membership comes from this channel's own Slack member list, mirrored into
+    // the "Managers" tab by syncManagersRosterFromSlack() (ManagersRoster.js).
+    // It used to select on the Log's PMS Level column, which is empty for most
+    // rows — that is why the report went out with 22 of the channel's 62 people
+    // (Gunjan/Chinmaya, 2026-09-01). The channel is the list someone actually
+    // maintains, so it is the list the summary reads.
+    // Literals, not the MANAGERS_* constants in ManagersRoster.js: Apps Script
+    // evaluates project files in an order it picks, so a top-level const read
+    // across files can land in the temporal dead zone and fail the whole load.
+    // The two must stay in step — "managers" == MANAGERS_GROUP_KEY, "Managers"
+    // == MANAGERS_ROSTER_SHEET_NAME.
     key: "managers",
     title: "Managers",
     channelId: "C061H34DECA",
     botName: "Managers Attendance Summary",
-    match: { type: "columnPattern", column: PMS_LEVEL_COLUMN, pattern: PMS_MANAGER_LEVEL_PATTERN }
+    match: { type: "roster", sheet: "Managers" }
   }
 ];
 
@@ -273,6 +287,12 @@ function runSummariesForPeriod_(period, options) {
     }
     Logger.log(`TEST MODE: all groups post to ${testChannelId}; no state will be written.`);
   }
+
+  // Mirror the managers Slack channel into its roster tab first, so the report
+  // reflects who is in that channel today. Skipped on dry runs, which promise to
+  // write nothing. Best-effort: a Slack failure leaves the previous roster in
+  // place rather than killing the whole run.
+  if (!dryRun) refreshManagersRosterBestEffort_();
 
   let snapshot;
   try {

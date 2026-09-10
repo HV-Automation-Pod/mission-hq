@@ -2,6 +2,8 @@ function onOpen() {
   const ui = SpreadsheetApp.getUi();
   ui.createMenu("MissionHQ")
     .addItem("Sync Employees from Zoho", "syncEmployeesFromZohoOrgTree")
+    .addItem("Sync Managers Roster", "syncManagersRosterFromSlack")
+    .addItem("Sync PMS Levels", "syncPmsLevelsToLog")
     .addSeparator()
     .addItem("Mark WFO Exempt…", "promptMarkWfoExempt")
     .addSeparator()
