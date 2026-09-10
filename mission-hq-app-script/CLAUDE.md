@@ -541,8 +541,14 @@ somebody actually maintains — people are added to it when they become a manage
 - A read that resolves to **zero** usable members throws instead of blanking the
   tab, so a transient Slack failure cannot wipe the roster.
 - `conversations.members` is tried with the attendance bot first, then the HV
-  Automation bot — for a private channel only a member app can list it, and the
-  HV Automation bot is the one already posting there.
+  Automation bot. **In production the fallback is the one that works**: the
+  attendance bot gets `channel_not_found` on `C061H34DECA` (verified
+  2026-09-10), so `HV_AUTOMATION_BOT_TOKEN` is load-bearing here — if that bot
+  is ever removed from the channel, this sync stops.
+- Bots in the channel are skipped and only **logged**; a skipped *person*
+  alerts. A channel like this always contains at least one app, so alerting on
+  bots would post to `#automation-alerts` on every single sync, and an alert
+  that always fires is one nobody reads.
 - The refresh runs inside `runSummariesForPeriod_()` **after** the Log snapshot
   is read, so it can reuse that already-read grid instead of reading a ~350-row
   sheet twice in one run.
@@ -559,7 +565,10 @@ somebody actually maintains — people are added to it when they become a manage
   bot**, never whichever token read the channel. The fallback token is the HV
   Automation bot, which has no `users:read.email`, and the members needing the
   lookup are the recent hires — dropping them would be a smaller copy of the bug
-  this replaces.
+  this replaces. This is not theoretical: the first production run resolved 59
+  members from the Log and needed `users.info` for the other 5. Reading them
+  with the channel token would have returned `missing_scope` five times and
+  written 61 − 2 = 59 people, quietly losing two managers.
 
 ### PMS Level column
 
