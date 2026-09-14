@@ -461,9 +461,17 @@ date (day >= 16 → `firstHalfPeriod_`, else `secondHalfPeriod_`). Month-end is
 derived as day 0 of the following month, so 28/29/30/31-day months and year
 rollovers are all handled.
 
-Triggers are created by `createSummaryTriggers()` in the throwaway
-`TempCreateTriggers.js` (1st and 16th at ~10 AM), or by hand in the Apps Script
-triggers UI pointing at `sendScheduledSummaries`.
+Triggers are created by **`createSummaryTriggers()`** (`FortnightlySummary.js`),
+which deletes every existing `sendScheduledSummaries` trigger and recreates both
+— the 1st and the 16th, ~10 AM IST. It is idempotent, so re-run it whenever the
+triggers look wrong.
+
+**The two are not interchangeable and neither is a spare.** Delete the 16th and
+the first half of every month is never reported; delete the 1st and the second
+half never is. This is easy to do by eye: in the triggers UI the two rows look
+like duplicates — same function, same hour, both showing `Last run: –` until one
+fires. It has happened once already (2026-09-14, the 16th was deleted as a
+duplicate two days before it was due to run).
 
 ### Posting identity
 
@@ -763,6 +771,7 @@ previewScheduledSummaries()   // logs only, posts nothing, writes no state
 testFirstHalfSummaries()      // the 16th run (1st-15th), to the test channel, any day
 testSecondHalfSummaries()     // the 1st run (16th-month end), to the test channel
 logDetailedAudit(groupKey)    // day-by-day breakdown, logs only
+createSummaryTriggers()       // (re)creates BOTH monthly triggers, idempotent
 syncPmsLevelsToLog()          // fills the Log's PMS Level column
 syncManagersRosterFromSlack() // rebuilds the "Managers" tab from Slack
 logManagersRoster()           // logs the tab as it stands, touches no API

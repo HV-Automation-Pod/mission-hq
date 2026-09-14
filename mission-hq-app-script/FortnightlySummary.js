@@ -240,6 +240,51 @@ function testSecondHalfSummaries() {
   return runSummariesForPeriod_(period, { test: true });
 }
 
+/**
+ * Creates BOTH monthly triggers for sendScheduledSummaries(). Run once, and
+ * re-run any time the triggers look wrong — it is idempotent, deleting every
+ * existing sendScheduledSummaries trigger before creating the pair.
+ *
+ * Two triggers, one function. The period is chosen from the run date by
+ * resolveSummaryPeriod_(), so each day of the month produces a different half:
+ *
+ *   1st  -> 16th to month end of LAST month
+ *   16th -> 1st to 15th of THIS month
+ *
+ * They are not interchangeable and neither is a spare. Deleting the 16th means
+ * the first half of every month is never reported; deleting the 1st means the
+ * second half never is. That is easy to do by eye in the triggers UI, where the
+ * two rows look like duplicates — same function, same hour, and both showing
+ * "Last run: –" until one of them fires.
+ *
+ * ~10 AM: the period being reported is always already finished, so the hour does
+ * not affect any number. It only decides when the channel gets pinged.
+ */
+function createSummaryTriggers() {
+  let removed = 0;
+  ScriptApp.getProjectTriggers().forEach(trigger => {
+    if (trigger.getHandlerFunction() === "sendScheduledSummaries") {
+      ScriptApp.deleteTrigger(trigger);
+      removed++;
+    }
+  });
+
+  [1, 16].forEach(day => {
+    ScriptApp.newTrigger("sendScheduledSummaries")
+      .timeBased()
+      .onMonthDay(day)
+      .atHour(10)
+      .inTimezone("Asia/Kolkata")
+      .create();
+  });
+
+  Logger.log(
+    `Removed ${removed} existing summary trigger(s); created 2 — the 1st (reports the 16th to ` +
+    `month end of the previous month) and the 16th (reports the 1st-15th), both ~10 AM IST.`
+  );
+  return { removed: removed, created: 2 };
+}
+
 /** Day-by-day breakdown, logged not posted. Use it when someone disputes a number. */
 function logDetailedAudit(groupKey) {
   const period = resolveSummaryPeriod_(new Date());
