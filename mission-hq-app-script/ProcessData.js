@@ -291,7 +291,7 @@ function processPendingEmailsAndSendSlackReminder() {
     // run into the 6-minute execution cap, which would leave the tail of the
     // sheet with no reminder at all. So the check is given a budget: past it,
     // the remaining rows are reminded the way they were before this existed.
-    // The nightly sweep still repairs anything it would have caught.
+    // The recovery sweep still repairs anything it would have caught.
     const reminderStarted = Date.now();
     let dmCheckSkippedForTime = 0;
 
@@ -365,7 +365,7 @@ function processPendingEmailsAndSendSlackReminder() {
           // person is looking at "Thank you for your update!", and the reminder
           // reads as the bot losing their response. Reported by Chethan on
           // 2026-09-08: answered 10:23, nagged 14 minutes later, and the
-          // nightly sweep repaired the cell afterwards.
+          // recovery sweep repaired the cell afterwards.
           //
           // So ask Slack before nagging. Their DM is the source of truth: if a
           // confirmation for today is sitting there, repair the cell now and
@@ -408,7 +408,7 @@ function processPendingEmailsAndSendSlackReminder() {
               // cell on "Pending", and Pending is NOT neutral: the fortnightly
               // summary counts it in the denominator and not in the numerator,
               // so silence would cost them a day in a published ranking. The
-              // nightly sweep cannot rescue it either — it resolves labels
+              // recovery sweep cannot rescue it either — it resolves labels
               // through the same map and fails identically. Asking again is the
               // only thing that actually fixes the day, and it is a genuinely
               // different situation from "we already have your answer".
@@ -445,7 +445,7 @@ function processPendingEmailsAndSendSlackReminder() {
     if (dmCheckSkippedForTime > 0) {
       Logger.log(
         `Pre-send DM check ran out of budget: ${dmCheckSkippedForTime} row(s) were reminded without it. ` +
-        `The nightly sweep still covers them.`
+        `The recovery sweep still covers them.`
       );
     }
     alertRemindersSuppressedByDmCheck_(todayDate, recovered, answeredNoLabel);

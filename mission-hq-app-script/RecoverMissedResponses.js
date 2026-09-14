@@ -63,16 +63,25 @@ const MISSED_SCAN_DUMP_ROWS = 30000;
 const MISSED_SCAN_CONFIRMATION_RE =
   /We received your response\s*(?:\*([^*]+)\*)?\s*for\s+(\d{4}-\d{2}-\d{2})/;
 
-// How many calendar days the daily self-healing sweep covers, counting today
-// as one of them: today, yesterday and the day before. Small on purpose — it
-// must finish inside one Apps Script execution, and anything older is caught by
-// a manual previewMissedResponses()/fixMissedResponses() run.
+// The self-healing sweep covers the last 7 finished days, but ONE DAY PER RUN.
 //
-// The trigger fires just after midnight IST, so "today" has no date column yet
-// (the prompt flow creates it around 10 AM). That column is simply absent and
-// skipped, which is why the window counts three days rather than two: it is the
-// two finished days that actually get repaired.
-const MISSED_SCAN_SWEEP_DAY_COUNT = 3;
+// A run that scans several days at once has to walk the whole sheet several
+// times over and risks the 6-minute execution cap, and when it does run out the
+// tail of the sheet is simply not swept. Scanning a single date instead keeps
+// every run small and predictable, and a rotating offset gets the same coverage
+// out of a trigger that fires often rather than a run that does a lot.
+//
+// Offset 1 is yesterday, 2 the day before, up to MISSED_SCAN_SWEEP_WINDOW_DAYS,
+// then back to 1. Today is deliberately NOT in the rotation: it is still being
+// answered, and the reminder run's own pre-send DM check covers it live.
+const MISSED_SCAN_SWEEP_WINDOW_DAYS = 7;
+
+// Where the rotation has got to. Holds the offset the NEXT run will use.
+const MISSED_SCAN_SWEEP_OFFSET_PROPERTY = "MISSED_RESPONSE_SWEEP_OFFSET";
+
+// How often the sweep trigger fires. At 4 hours that is 6 runs a day, so the
+// 7-day window comes round roughly every 28 hours.
+const MISSED_SCAN_SWEEP_TRIGGER_HOURS = 4;
 
 // doPost's own DUMP breadcrumbs.
 const MISSED_SCAN_DUMP_REQUEST_RE =
@@ -103,32 +112,54 @@ function fixMissedResponses(fromDate, toDate) {
 }
 
 /**
- * DAILY SAFETY NET — wire this to a time-based trigger (see
+ * ROTATING SAFETY NET — wire this to an hourly trigger (see
  * createMissedResponseSweepTrigger).
  *
- * Re-checks a fixed three-day window — today, yesterday and the day before
- * (MISSED_SCAN_SWEEP_DAY_COUNT) — silently repairs any response that Slack
- * confirmed but the sheet lost, and posts to #automation-alerts whenever it had
- * to repair something. This is what turns a silent data loss into a visible one:
- * whatever
- * breaks in the chain — the edge function's forward, doPost dying mid-write, or
- * a stale-snapshot overwrite — the sweep catches it the next morning and says so.
+ * Each run repairs exactly ONE day, walking backwards: yesterday, then the day
+ * before, and so on to MISSED_SCAN_SWEEP_WINDOW_DAYS, then back to yesterday.
+ * Whatever breaks in the chain — the edge function's forward, doPost dying
+ * mid-write, a stale-snapshot overwrite — it is caught within one turn of the
+ * rotation and said out loud in #automation-alerts.
  *
- * It deliberately ignores the resume cursor: it is a bounded daily job, not the
- * full historical backfill.
+ * One day per run is the whole point. A multi-day scan walks the sheet several
+ * times over and can hit the 6-minute cap, and when it does the tail of the
+ * sheet is silently not swept — which is the failure this job exists to catch,
+ * reappearing inside the fix. A single date is small, predictable, and finishes.
+ *
+ * The offset is advanced BEFORE the scan runs, so a date that fails repeatedly
+ * cannot wedge the rotation on itself and starve the other six.
+ *
+ * It deliberately ignores the resume cursor: it is a bounded job, not the full
+ * historical backfill.
  */
-function dailyMissedResponseSweep() {
-  const today = new Date();
-  const toDate = Utilities.formatDate(today, "Asia/Kolkata", "yyyy-MM-dd");
-  const from = new Date();
-  from.setDate(from.getDate() - (MISSED_SCAN_SWEEP_DAY_COUNT - 1));
-  const fromDate = Utilities.formatDate(from, "Asia/Kolkata", "yyyy-MM-dd");
+function rollingMissedResponseSweep() {
+  const props = PropertiesService.getScriptProperties();
+  const stored = parseInt(props.getProperty(MISSED_SCAN_SWEEP_OFFSET_PROPERTY) || "1", 10);
+  // Anything out of range (unset, hand-edited, a shrunken window) restarts at
+  // yesterday rather than silently scanning a date outside the window.
+  const offset = (stored >= 1 && stored <= MISSED_SCAN_SWEEP_WINDOW_DAYS) ? stored : 1;
+
+  // Advance first. If the scan throws, the next run still moves on.
+  const nextOffset = (offset % MISSED_SCAN_SWEEP_WINDOW_DAYS) + 1;
+  props.setProperty(MISSED_SCAN_SWEEP_OFFSET_PROPERTY, nextOffset.toString());
+
+  // Built from the timezone-formatted date rather than by subtracting from a raw
+  // Date, so a run near midnight cannot land on the wrong day.
+  const parts = Utilities.formatDate(new Date(), "Asia/Kolkata", "yyyy-MM-dd").split("-");
+  const target = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]));
+  target.setDate(target.getDate() - offset);
+  const sweepDate = Utilities.formatDate(target, "Asia/Kolkata", "yyyy-MM-dd");
+
+  const fromDate = sweepDate;
+  const toDate = sweepDate;
+  Logger.log(
+    `Rolling sweep: offset ${offset} of ${MISSED_SCAN_SWEEP_WINDOW_DAYS} -> ${sweepDate}. ` +
+    `Next run takes offset ${nextOffset}.`
+  );
 
   let result;
   try {
-    // Bounded at BOTH ends: the sweep is a fixed three-day window, never the
-    // whole sheet. An unbounded upper end would also pull in any date column
-    // that happens to sit in the future.
+    // fromDate === toDate: exactly one date column, never the whole sheet.
     result = runMissedResponseScan_({
       dryRun: false,
       fromDate: fromDate,
@@ -139,7 +170,7 @@ function dailyMissedResponseSweep() {
     // A sweep that cannot run is itself worth an alert — otherwise the safety
     // net fails silently, which is the exact problem it exists to solve.
     sendErrorAlert(`Attendance recovery sweep failed to run: ${error.message}`, {
-      functionName: 'dailyMissedResponseSweep',
+      functionName: 'rollingMissedResponseSweep',
       sheetName: CANDIDATE_SHEET_NAME,
       additionalInfo:
         'Responses confirmed in Slack may be missing from the sheet and are NOT being repaired.',
@@ -148,12 +179,14 @@ function dailyMissedResponseSweep() {
   }
 
   if (result.written > 0 || result.unrecoverable > 0) {
+    // The date stays OUT of the title — sendErrorAlert dedupes on function +
+    // message, and a date there would make every run a distinct alert.
     sendErrorAlert(
-      `Recovered ${result.written} attendance response(s) that were lost after the user was told they were saved`,
+      `Recovered attendance response(s) that were lost after the user was told they were saved`,
       {
-        functionName: 'dailyMissedResponseSweep',
+        functionName: 'rollingMissedResponseSweep',
         sheetName: CANDIDATE_SHEET_NAME,
-        additionalInfo: buildSweepAlert_(result, fromDate, toDate),
+        additionalInfo: buildSweepAlert_(result, sweepDate),
       }
     );
   }
@@ -164,39 +197,59 @@ function dailyMissedResponseSweep() {
   // looking". There is no cursor to resume from here, so say so out loud.
   if (!result.complete) {
     sendErrorAlert('Attendance recovery sweep ran out of time and did NOT finish', {
-      functionName: 'dailyMissedResponseSweep',
+      functionName: 'rollingMissedResponseSweep',
       sheetName: CANDIDATE_SHEET_NAME,
       additionalInfo:
-        `Checked up to sheet row ${result.lastRow} of ${result.totalRows}; rows after that were ` +
-        `not swept today. Anything lost below that row is still \`Pending\`. ` +
-        `Run \`fixMissedResponses('${fromDate}', '${toDate}')\` to finish the job.`,
+        `Sweeping *${sweepDate}* it reached only sheet row ${result.lastRow} of ${result.totalRows}; ` +
+        `rows after that were not checked, and anything lost below that row is still \`Pending\`. ` +
+        `One date should never take this long — check the row count. ` +
+        `Run \`fixMissedResponses('${sweepDate}', '${sweepDate}')\` to finish the job.`,
     });
   }
 
   return result;
 }
 
-/** Creates the daily trigger for dailyMissedResponseSweep(). Run once. */
+/**
+ * Creates the hourly trigger for rollingMissedResponseSweep(). Run once.
+ *
+ * Deletes triggers for the old `dailyMissedResponseSweep` name too, so
+ * re-running this after the rename cannot leave a dead midnight trigger behind
+ * pointing at a function that no longer exists.
+ */
 function createMissedResponseSweepTrigger() {
+  const handlers = ["rollingMissedResponseSweep", "dailyMissedResponseSweep"];
+  let removed = 0;
   ScriptApp.getProjectTriggers().forEach(trigger => {
-    if (trigger.getHandlerFunction() === "dailyMissedResponseSweep") {
+    if (handlers.indexOf(trigger.getHandlerFunction()) !== -1) {
       ScriptApp.deleteTrigger(trigger);
+      removed++;
     }
   });
-  ScriptApp.newTrigger("dailyMissedResponseSweep")
+
+  ScriptApp.newTrigger("rollingMissedResponseSweep")
     .timeBased()
-    // Just after midnight: the day is over, so every submission and edit for it
-    // has landed. Apps Script picks a minute inside the hour, i.e. 00:00-01:00.
-    .atHour(0)
-    .everyDays(1)
-    .inTimezone("Asia/Kolkata")
+    .everyHours(MISSED_SCAN_SWEEP_TRIGGER_HOURS)
     .create();
-  Logger.log("Daily missed-response sweep trigger created for ~00:00-01:00 IST.");
+
+  Logger.log(
+    `Removed ${removed} old sweep trigger(s). Rolling sweep now runs every ` +
+    `${MISSED_SCAN_SWEEP_TRIGGER_HOURS} hour(s), one day per run, covering the last ` +
+    `${MISSED_SCAN_SWEEP_WINDOW_DAYS} days.`
+  );
 }
 
-function buildSweepAlert_(result, fromDate, toDate) {
+/** Puts the rotation back to yesterday on the next run. */
+function resetMissedResponseSweepRotation() {
+  PropertiesService.getScriptProperties()
+    .setProperty(MISSED_SCAN_SWEEP_OFFSET_PROPERTY, "1");
+  Logger.log("Sweep rotation reset — the next run sweeps yesterday.");
+}
+
+function buildSweepAlert_(result, sweepDate) {
   const lines = [
-    `These people answered in Slack but the sheet still said \`Pending\`. Restored from their DM confirmation.`,
+    `${result.written} response(s) for *${sweepDate}*: answered in Slack, but the sheet still said ` +
+    `\`Pending\`. Restored from the DM confirmation.`,
     ""
   ];
 
@@ -210,7 +263,10 @@ function buildSweepAlert_(result, fromDate, toDate) {
   }
 
   lines.push("");
-  lines.push(`_Scanned ${fromDate} to ${toDate}. Recovery is automatic; this alert exists so the underlying failure does not stay invisible._`);
+  lines.push(
+    `_One day per run, rotating back over the last ${MISSED_SCAN_SWEEP_WINDOW_DAYS} days. Recovery is ` +
+    `automatic; this alert exists so the underlying failure does not stay invisible._`
+  );
   return lines.join("\n");
 }
 

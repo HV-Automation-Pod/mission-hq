@@ -335,7 +335,7 @@ own. For each pending row it calls `findDmAnswerForDate_()` — one bounded
   the person is named in the alert. There is nothing to write into the cell, and
   `Pending` is not neutral: the fortnightly summary counts it in the denominator
   and not in the numerator, so staying quiet would cost them a day in a published
-  ranking. The nightly sweep cannot rescue it either — it resolves labels through
+  ranking. The recovery sweep cannot rescue it either — it resolves labels through
   the same map and fails identically. Asking again is the only thing that fixes
   the day, and it is a different situation from "we already have your answer".
 - **Nothing found, or the lookup failed** → the reminder goes out as before. A
@@ -362,21 +362,37 @@ The check costs one extra Slack call per pending row on top of a loop that
 already sleeps a second per row, so it runs under a **3.5-minute budget**
 (`REMINDER_DM_CHECK_BUDGET_MS`). Past that, the remaining rows are reminded
 without it rather than risking the 6-minute execution cap — the tail of the sheet
-getting no reminder at all would be the worse failure. The nightly sweep still
+getting no reminder at all would be the worse failure. The recovery sweep still
 covers whatever the budget skipped.
 
-### 2. The nightly sweep
+### 2. The rolling sweep — one day per run
 
-`dailyMissedResponseSweep()` runs on a daily trigger at **~00:00–01:00 IST**
-(`createMissedResponseSweepTrigger`, `atHour(0)`), when the day is over and every
-submission and edit for it has landed.
+`rollingMissedResponseSweep()` runs on an **hourly trigger every
+`MISSED_SCAN_SWEEP_TRIGGER_HOURS` hours** (4, so six runs a day), and each run
+repairs **exactly one day**, walking backwards:
 
-It scans a fixed **three-day window — today, yesterday and the day before**
-(`MISSED_SCAN_SWEEP_DAY_COUNT`), bounded at both ends. Because it fires just
-after midnight, today's date column does not exist yet (the prompt flow creates
-it around 10 AM); that column is simply absent and skipped, so in practice the
-sweep repairs the **two finished days**. Anything older needs a manual
-`previewMissedResponses(from, to)` / `fixMissedResponses(from, to)` run.
+```text
+run 1 -> yesterday          offset 1
+run 2 -> the day before     offset 2
+...
+run 7 -> 7 days ago         offset MISSED_SCAN_SWEEP_WINDOW_DAYS
+run 8 -> yesterday again    back to offset 1
+```
+
+The offset lives in the `MISSED_RESPONSE_SWEEP_OFFSET` script property and is
+**advanced before the scan runs**, so a date that fails repeatedly cannot wedge
+the rotation on itself and starve the other six.
+`resetMissedResponseSweepRotation()` puts it back to yesterday.
+
+One day per run is the point. A multi-day scan walks the sheet once per date and
+can hit the 6-minute cap — and when it does, the tail of the sheet is silently
+not swept, which is the exact failure this job exists to catch reappearing inside
+the fix. A single date is small and always finishes; frequency does the covering
+instead of one long run.
+
+**Today is not in the rotation.** It is still being answered, and the reminder
+run's own pre-send DM check covers it live. Anything older than the window needs
+a manual `previewMissedResponses(from, to)` / `fixMissedResponses(from, to)`.
 
 It alerts on three things: rows it repaired, rows that answered but could not be
 recovered, and **its own failure to finish** — a safety net that fails quietly is

@@ -534,7 +534,7 @@ async function alertLostResponse(record: { email: string; date: string; status: 
           `*Error:* \`Attendance response LOST — the user was told it was saved: ${reason}\`\n` +
           `*Function:* \`mission-hq edge function / forwardToAppsScript\`\n` +
           `*Details:* \`${record.email}\` on \`${record.date}\` (response \`${record.status}\`). ` +
-          `The sheet still shows \`Pending\`. The nightly sweep recovers it from the Slack DM.`,
+          `The sheet still shows \`Pending\`. The recovery sweep recovers it from the Slack DM.`,
       }),
     });
     const json = await response.json();
