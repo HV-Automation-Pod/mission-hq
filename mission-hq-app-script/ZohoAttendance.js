@@ -236,6 +236,10 @@ function pushZohoAttendanceBatch_(records) {
   throw new Error(`Zoho attendance bulk import failed for all endpoints: ${errors.join(" | ")}`);
 }
 
+function testSyncAttendanceToZohoForDate() {
+  syncAttendanceToZohoForDate("2026-09-11")
+}
+
 /**
  * Pushes attendance for a single date and returns a summary.
  */
