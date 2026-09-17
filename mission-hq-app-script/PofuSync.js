@@ -28,6 +28,16 @@ const POFU_COLUMN_SPECS = [
   { key: "empId",  header: "Employee ID",     owned: true,  candidates: ["Employee ID", "Emp ID", "Zoho Emp ID", "Employee Id"] },
   { key: "email",  header: "Employee Email",  owned: true,  candidates: ["Employee Email", "Email Address", "Email ID", "Email"] },
   { key: "doj",    header: "Date of Joining", owned: true,  candidates: ["Date of Joining", "Joining Date", "DOJ", "Date Joined"] },
+  // Department is the org tree's `department` (falling back to `business_unit`)
+  // — the SAME expression WeCare's own sync-employees uses to fill its
+  // `employees.team`, deliberately, because the POFU automation matches this
+  // string against the HRBP mapping WeCare maintains. Two syncs deriving a team
+  // two different ways would route the same person to two different HRBPs.
+  //
+  // Tracks Zoho like Employee ID rather than filling only when blank: a
+  // transfer between teams changes who the person's HRBP is, and a stale value
+  // here escalates a new joiner to the wrong one silently.
+  { key: "dept",   header: "Department",     owned: true,  candidates: ["Department", "Team", "Business Unit", "Function"] },
   { key: "msg48h", header: "48 Hour Message", owned: false, candidates: ["48 Hour Message", "48 Hr Message", "48hr Message"] },
   { key: "msg30d", header: "30 Day Message",  owned: false, candidates: ["30 Day Message", "30 Days Message", "30day Message"] },
   { key: "msg90d", header: "90 Day Message",  owned: false, candidates: ["90 Day Message", "90 Days Message", "90day Message"] }
@@ -43,8 +53,8 @@ const POFU_THEME = {
   border: "#D8DEE7"
 };
 
-const POFU_COLUMN_WIDTHS = { name: 190, empId: 110, email: 260, doj: 130, msg48h: 150, msg30d: 150, msg90d: 150 };
-const POFU_COLUMN_ALIGNMENTS = { name: "left", empId: "center", email: "left", doj: "center", msg48h: "center", msg30d: "center", msg90d: "center" };
+const POFU_COLUMN_WIDTHS = { name: 190, empId: 110, email: 260, doj: 130, dept: 170, msg48h: 150, msg30d: 150, msg90d: 150 };
+const POFU_COLUMN_ALIGNMENTS = { name: "left", empId: "center", email: "left", doj: "center", dept: "left", msg48h: "center", msg30d: "center", msg90d: "center" };
 
 /**
  * Parses the org-tree `date_of_joining` ("10-Aug-2026") into a real Date, so
@@ -272,12 +282,14 @@ function syncEmployeesToPofuSheet(employees) {
   let nameValues = [];
   let empIdValues = [];
   let dojValues = [];
+  let deptValues = [];
   if (lastRow > 1) {
     const dataRowCount = lastRow - 1;
     const emailValues = sheet.getRange(2, columns.email + 1, dataRowCount, 1).getDisplayValues();
     nameValues = sheet.getRange(2, columns.name + 1, dataRowCount, 1).getValues();
     empIdValues = sheet.getRange(2, columns.empId + 1, dataRowCount, 1).getValues();
     dojValues = sheet.getRange(2, columns.doj + 1, dataRowCount, 1).getValues();
+    deptValues = sheet.getRange(2, columns.dept + 1, dataRowCount, 1).getValues();
     emailValues.forEach((row, i) => {
       const email = row[0]?.toString().trim().toLowerCase();
       if (email && !(email in existingRowByEmail)) existingRowByEmail[email] = i;
@@ -291,6 +303,7 @@ function syncEmployeesToPofuSheet(employees) {
   let namesFilled = 0;
   let empIdsUpdated = 0;
   let joiningDatesFilled = 0;
+  let departmentsUpdated = 0;
   let missingJoiningDate = 0;
 
   employees.forEach(employee => {
@@ -308,6 +321,7 @@ function syncEmployeesToPofuSheet(employees) {
     const empId = (employee.emp_id || "").toString().trim();
     const joiningDate = parsePofuDate_(employee.date_of_joining);
     if (!joiningDate) missingJoiningDate++;
+    const department = ((employee.department || employee.business_unit) || "").toString().trim();
 
     if (emailKey in existingRowByEmail) {
       const rowIndex = existingRowByEmail[emailKey];
@@ -323,6 +337,15 @@ function syncEmployeesToPofuSheet(employees) {
       if (empId && (empIdValues[rowIndex][0]?.toString().trim() || "") !== empId) {
         empIdValues[rowIndex][0] = empId;
         empIdsUpdated++;
+        touched = true;
+      }
+      // Department tracks Zoho, like Employee ID: a team change moves the person
+      // to a different HRBP, and the POFU escalation reads this column to find
+      // them. Only overwritten when Zoho actually has a value, so a blank in
+      // the feed never wipes a department somebody filled in by hand.
+      if (department && (deptValues[rowIndex][0]?.toString().trim() || "") !== department) {
+        deptValues[rowIndex][0] = department;
+        departmentsUpdated++;
         touched = true;
       }
       // Joining date is filled only when blank, so a corrected date entered by
@@ -343,6 +366,7 @@ function syncEmployeesToPofuSheet(employees) {
     row[columns.empId] = empId;
     row[columns.email] = email;
     row[columns.doj] = joiningDate;
+    row[columns.dept] = department;
     // Message columns stay blank — the POFU automation fills them.
     newRows.push(row);
   });
@@ -351,6 +375,7 @@ function syncEmployeesToPofuSheet(employees) {
   if (namesFilled > 0) sheet.getRange(2, columns.name + 1, nameValues.length, 1).setValues(nameValues);
   if (empIdsUpdated > 0) sheet.getRange(2, columns.empId + 1, empIdValues.length, 1).setValues(empIdValues);
   if (joiningDatesFilled > 0) sheet.getRange(2, columns.doj + 1, dojValues.length, 1).setValues(dojValues);
+  if (departmentsUpdated > 0) sheet.getRange(2, columns.dept + 1, deptValues.length, 1).setValues(deptValues);
   if (newRows.length > 0) {
     // formatPofuSheet_() trims the grid to the data plus a small pad, so make
     // sure there is room before appending.
@@ -376,7 +401,8 @@ function syncEmployeesToPofuSheet(employees) {
   }
   Logger.log(
     `POFU sync complete. Added ${newRows.length}; updated ${updated} existing row(s) ` +
-    `(names ${namesFilled}, employee ids ${empIdsUpdated}, joining dates ${joiningDatesFilled}); ` +
+    `(names ${namesFilled}, employee ids ${empIdsUpdated}, joining dates ${joiningDatesFilled}, ` +
+    `departments ${departmentsUpdated}); ` +
     `unchanged ${unchanged}; skipped ${skipped} (no email).`
   );
 

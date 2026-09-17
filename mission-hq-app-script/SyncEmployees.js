@@ -171,6 +171,18 @@ function syncEmployeesFromZohoOrgTree() {
   }
   SpreadsheetApp.flush(); // so the PMS sync below sees the rows just appended
 
+  // Same payload again, third use: mark anyone no longer in it as WFO Exempt.
+  // This sync only ever ADDS, so without this a leaver's row lives on for ever
+  // — still prompted (Slack keeps a deactivated user's DM alive, so the send
+  // succeeds and stamps "Pending") and still ranked in the fortnightly summary.
+  // Best-effort, and it re-uses `employees` rather than re-fetching.
+  let exitSweep = null;
+  try {
+    exitSweep = markExitedEmployeesBestEffort_({ employees: employees });
+  } catch (exitError) {
+    Logger.log(`Offboarding sweep skipped: ${exitError.message}`);
+  }
+
   // Refresh the PMS Level column off the back of the employee sync, so new hires
   // and level changes are picked up on the same cadence. Best-effort: a PMS
   // access failure must not fail the employee sync itself.
@@ -192,7 +204,8 @@ function syncEmployeesFromZohoOrgTree() {
     slackIdsFilled: slackIdsFilled,
     skipped: skipped,
     pmsLevelSync: pmsLevelSync,
-    pofuSync: pofuSync
+    pofuSync: pofuSync,
+    exitSweep: exitSweep
   };
   } catch (e) {
     sendErrorAlert('Employee sync from Zoho org tree failed: ' + (e && e.message ? e.message : e), { functionName: 'syncEmployeesFromZohoOrgTree' });
@@ -208,11 +221,62 @@ function fetchZohoOrgTreeEmployees_() {
   const url = getRequiredScriptProperty_(ZOHO_ORG_TREE_URL_PROPERTY);
   const token = getOptionalScriptProperty_(ZOHO_ORG_TREE_TOKEN_PROPERTY, "");
 
+  const response = fetchOrgTreeWithAuth_(url, token);
+
+  const code = response.getResponseCode();
+  if (code < 200 || code >= 300) {
+    const body = response.getContentText();
+    // 401 is the one worth explaining: it is almost always a missing or stale
+    // key rather than a broken endpoint, and the fix is a property edit.
+    if (code === 401 || code === 403) {
+      throw new Error(
+        `org-tree endpoint returned HTTP ${code}: ${body}. ` +
+        `The ${ZOHO_ORG_TREE_TOKEN_PROPERTY} script property must equal the function's ` +
+        `TASK_REMINDER_CRON_SECRET Supabase secret — it is sent as the x-internal-secret header.`
+      );
+    }
+    throw new Error(`org-tree endpoint returned HTTP ${code}: ${body}`);
+  }
+
+  const json = JSON.parse(response.getContentText());
+  const employees = json && Array.isArray(json.employees) ? json.employees : [];
+  Logger.log(`Fetched ${employees.length} employees (total_active: ${json.total_active}).`);
+  return employees;
+}
+
+/**
+ * GETs the org-tree endpoint with the secret the function actually checks.
+ *
+ * The guard is in the deployed function (verified 2026-09-17 by
+ * `supabase functions download zoho-org-tree --project-ref <SLACK_BOT_REF>`,
+ * because the copy in prod-mursa's repo is stale and has no guard at all):
+ *
+ *   const INTERNAL_SECRET = Deno.env.get("TASK_REMINDER_CRON_SECRET") ?? "";
+ *   if (!INTERNAL_SECRET || req.headers.get("x-internal-secret") !== INTERNAL_SECRET) {
+ *     return json({ error: "Unauthorized" }, 401);
+ *   }
+ *
+ * So the header is `x-internal-secret` and the value is a plain shared secret —
+ * NOT a bearer token and NOT the Supabase anon key. Sending it as
+ * `Authorization: Bearer <key>` or `apikey` gets a 401 no matter how correct the
+ * key is, which is exactly what happened before this was pinned down.
+ *
+ * `Authorization` / `apikey` are still sent because they are what Supabase's own
+ * gateway reads if `verify_jwt` is ever turned on for this function; they cost
+ * nothing while it is off. The secret is what gets past the function's guard.
+ *
+ * Note the env var behind it is named TASK_REMINDER_CRON_SECRET — a shared
+ * internal secret reused across functions in that project, not something
+ * org-tree-specific. Do not rename one end without the other.
+ */
+function fetchOrgTreeWithAuth_(url, token) {
   const headers = {};
   if (token) {
-    // Supabase Edge Functions accept the anon/service key via either header.
+    headers["x-internal-secret"] = token; // the one the guard actually reads
     headers["Authorization"] = "Bearer " + token;
     headers["apikey"] = token;
+  } else {
+    Logger.log(`${ZOHO_ORG_TREE_TOKEN_PROPERTY} is not set — calling the endpoint unauthenticated.`);
   }
 
   const response = UrlFetchApp.fetch(url, {
@@ -220,14 +284,6 @@ function fetchZohoOrgTreeEmployees_() {
     headers: headers,
     muteHttpExceptions: true
   });
-
-  const code = response.getResponseCode();
-  if (code < 200 || code >= 300) {
-    throw new Error(`org-tree endpoint returned HTTP ${code}: ${response.getContentText()}`);
-  }
-
-  const json = JSON.parse(response.getContentText());
-  const employees = json && Array.isArray(json.employees) ? json.employees : [];
-  Logger.log(`Fetched ${employees.length} employees (total_active: ${json.total_active}).`);
-  return employees;
+  Logger.log(`org-tree GET: HTTP ${response.getResponseCode()}`);
+  return response;
 }

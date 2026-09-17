@@ -102,6 +102,7 @@ ZohoPeople.js      Zoho People OAuth and leave sync
 ZohoAttendance.js  Push MissionHQ attendance into Zoho People (bulk import)
 FortnightlySummary.js  Fortnightly per-group attendance summaries to Slack channels
 ManagersRoster.js  Mirrors the managers Slack channel into the "Managers" tab
+Offboarding.js     Marks leavers WFO Exempt so they drop out of prompts + summaries
 RecoverMissedResponses.js  Nightly sweep + the reminder run's pre-send DM check
 WebApp.js          doGet API for dashboard and leave sync endpoints
 GetData.js         Sheet/user lookup helpers
@@ -431,6 +432,87 @@ prompt). To refresh:
 Keep facts work-appropriate — the prompt DMs the whole org. This mirrors the
 referral bot's motivational-sentence refill alert (`Slack.js` →
 `REFERRAL_ALERT_USER_ID`) in the `hypertalent-platform/ta-scripts/referral` repo.
+
+## Offboarding Sweep (`Offboarding.js`) — leavers stop being counted
+
+`syncEmployeesFromZohoOrgTree()` only ever **adds**. Nothing told the sheet that
+somebody had gone, so a leaver's row lived in the MissionHQ Log for ever — and
+because **Slack keeps a deactivated user's DM channel alive**,
+`chat.postMessage` kept returning `ok`, so the daily flow stamped `Pending` on
+them every working day. The fortnightly summary then ranked those Pending days
+at 0%, dropped them into tier D, and named them in the "please DM PnC so we can
+fix the check-in gap" call-out.
+
+That is how Nidhi Sandur — offboarded from Zoho months earlier, Slack account
+deactivated — was still in the G&A snapshot (Gayathiri, 2026-09-16).
+
+`markExitedEmployees()` writes into the **`WFO Exempt`** column, which the prompt
+flow, the reminder flow and `resolveGroupMembers_()` already honour. One
+mechanism, three consumers. It is **retroactive for reporting**: an exempt row is
+filtered out of past periods too, so the next snapshot of a half-month already
+posted no longer contains them. Nothing is deleted — their history stays in the
+sheet, and **clearing the cell puts anyone straight back**.
+
+### The two signals are deliberately not symmetric
+
+```text
+Zoho org tree   the authority on employment — the endpoint returns every active
+                employee, so absent from it == no longer employed
+Slack           only DEACTIVATION (users.list `deleted: true`) counts
+```
+
+**"Has no Slack account" is NOT a signal.** A new hire is in Zoho days before
+they get a Slack account, and marking them exempt would silence their prompts
+for ever. Deactivated is a positive statement that the account is finished;
+missing is just absence of news. Do not "simplify" these into one rule.
+
+Either signal alone is enough to mark someone, which covers the lag in both
+directions — Slack is usually deactivated on the last day while Zoho offboarding
+is processed later, and occasionally the reverse.
+
+### Safety
+
+- **Empty org-tree payload throws** rather than reading as "everybody left".
+- **Mass-exit guard**: if more than `EXIT_SWEEP_MAX_EXIT_FRACTION` (20%) of live
+  rows look exited, the run aborts, marks nobody and alerts — a truncated
+  org-tree response looks exactly like the whole company leaving at once. Use
+  `markExitedEmployees({ force: true })` for a genuine mass exit.
+- **Rows already exempt are never re-stamped**, so hand-written reasons survive.
+- **A Slack failure degrades to the Zoho signal alone** (`users.list` returning
+  not-ok is logged, not thrown).
+- Every marking run **alerts** `#automation-alerts` with the names and reasons.
+  This stops people being messaged and removes them from a published ranking, so
+  a wrong one has to be visible enough to undo. Names go in the alert **body** —
+  `sendErrorAlert` dedupes on function + message, so a count in the title would
+  defeat the cooldown.
+
+`users.list` (paginated, ~2-3 requests) rather than `users.info` per row: the Log
+is ~350 rows, so that is three requests instead of 350.
+
+### When it runs
+
+```text
+end of syncEmployeesFromZohoOrgTree()   re-uses the payload, no extra Zoho call
+start of runSummariesForPeriod_()       BEFORE the snapshot is read
+menu: Preview Exited Employees          dry run — logs who and why, writes nothing
+menu: Mark Exited Employees             the real thing
+```
+
+It runs inside the summary flow **as well as** the employee sync because that
+sync is a manual menu action — between two runs of it a leaver would still be
+ranked, which is the exact bug. It must sit **before** `readMissionHqSnapshot_()`
+so the snapshot sees the `WFO Exempt` values it just wrote. Dry runs
+(`previewScheduledSummaries()`) skip it; test runs do it, for the same reason
+they refresh the Managers roster.
+
+### Functions
+
+```text
+markExitedEmployees([options])     // options: { employees, dryRun, force }
+previewExitedEmployees()           // dry run
+markExitedEmployeesBestEffort_()   // logs + alerts, never throws into the caller
+fetchSlackDirectory_()             // whole Slack member list, { ok, byEmail, byId }
+```
 
 ## Fortnightly Attendance Summaries (`FortnightlySummary.js`)
 
@@ -881,9 +963,51 @@ syncZohoPeopleLeavesForDate(dateString)
 `syncEmployeesFromZohoOrgTree()` (menu: **Sync Employees from Zoho**) GETs the
 org-tree endpoint and syncs employees into the MissionHQ Log sheet. Idempotent.
 
-- Reads the endpoint URL from the `ZOHO_ORG_TREE_URL` Apps Script Property, with
-  optional `ZOHO_ORG_TREE_TOKEN` sent as both `Authorization: Bearer` and
-  `apikey` headers. Expects JSON `{ total_active, employees: [...] }` where each
+- Reads the endpoint URL from the `ZOHO_ORG_TREE_URL` Apps Script Property and
+  the key from `ZOHO_ORG_TREE_TOKEN`. **A 401 `{"error":"unauthorized"}` from
+  this endpoint is a missing or stale key, not a broken endpoint** — fix it by
+  editing that property, no code change or push needed (seen 2026-09-17 when a
+  security key was added to the function).
+
+  The endpoint's guard is **inside the function**, and it reads a header nobody
+  would guess (verified 2026-09-17 with
+  `supabase functions download zoho-org-tree --project-ref <SLACK_BOT_REF>` —
+  the copy in prod-mursa's repo is **stale and has no guard at all**):
+
+```ts
+const INTERNAL_SECRET = Deno.env.get("TASK_REMINDER_CRON_SECRET") ?? "";
+if (!INTERNAL_SECRET || req.headers.get("x-internal-secret") !== INTERNAL_SECRET) {
+  return json({ error: "Unauthorized" }, 401);
+}
+```
+
+  So the key travels as **`x-internal-secret`**, as a plain shared secret — it is
+  **not** a bearer token and **not** the Supabase anon key. Sending it as
+  `Authorization: Bearer <key>` or `apikey` returns 401 however correct the key
+  is; that cost an afternoon on 2026-09-17. `Authorization` / `apikey` are still
+  sent alongside, because they are what Supabase's own gateway reads if
+  `verify_jwt` is ever switched on for this function.
+
+  The Supabase secret behind it is named **`TASK_REMINDER_CRON_SECRET`** — a
+  shared internal secret reused across functions in that project, not something
+  org-tree-specific. `ZOHO_ORG_TREE_TOKEN` in Apps Script must equal it exactly.
+
+  The function is deployed to the shared **Slack Bot** Supabase project
+  (`riiisqzwbhlytogcjdmn`), and its source in this org lives outside this repo at
+  `prod-mursa/supabase/functions/zoho-org-tree/` — **which is behind the deployed
+  version**. Deploying from that repo would delete the guard. Download the live
+  source before touching it.
+
+  Two other callers share the endpoint and **both send the wrong thing**, so both
+  are 401ing against this guard:
+
+```text
+prod-mursa/supabase/functions/admin-task-cleanup  Authorization: Bearer ${ANON}
+  (index.ts:974, :986 — and swallows the 401 into its per-user report, so it
+  fails silently rather than alerting)
+resolve-os/supabase/functions/sync-employees      no auth headers at all
+  (index.ts:181 — needs a code change, not just a secret)
+``` Expects JSON `{ total_active, employees: [...] }` where each
   employee has `email`, `first_name`, `last_name`, `department`, `location`,
   **`emp_id`**, etc. (`emp_id` values look like `551` or `348C` for contractors).
 - New employees (email not in the sheet) → appends a row with Full Name / Email

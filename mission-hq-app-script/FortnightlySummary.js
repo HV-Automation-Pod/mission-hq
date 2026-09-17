@@ -333,6 +333,21 @@ function runSummariesForPeriod_(period, options) {
     Logger.log(`TEST MODE: all groups post to ${testChannelId}; no state will be written.`);
   }
 
+  // Take leavers out BEFORE the snapshot is read, so the report cannot rank
+  // someone who has left. It has to happen here and not only in the employee
+  // sync: that sync is a manual menu action, so between two runs of it a leaver
+  // would still be ranked — which is exactly how an offboarded person reached
+  // the G&A channel (Gayathiri, 2026-09-16). This writes the WFO Exempt column,
+  // which resolveGroupMembers_() already filters on, so nothing else changes.
+  //
+  // Dry runs skip it because they write nothing at all by definition; test runs
+  // do it for the same reason they refresh the Managers roster — a test that
+  // reports a different set of people than the real send is not testing the
+  // real send.
+  if (!dryRun) {
+    markExitedEmployeesBestEffort_();
+  }
+
   let snapshot;
   try {
     snapshot = readMissionHqSnapshot_(period.start, period.end);
