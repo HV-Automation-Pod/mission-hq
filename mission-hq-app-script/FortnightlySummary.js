@@ -463,7 +463,32 @@ function runSummariesForPeriod_(period, options) {
   });
 
   Logger.log(`Summary run complete (${period.label}): ${JSON.stringify(results)}`);
-  return { success: true, period: period, dryRun: dryRun, test: testMode, results: results };
+  const sentResults = results.filter(result => result.sent);
+  const unsentResults = results.filter(result => !result.sent);
+
+  // Confirm real scheduled/manual sends in the same admin channel as failures.
+  // Test and preview runs deliberately stay quiet so they do not look live.
+  if (!dryRun && !testMode) {
+    const sentGroups = sentResults.map(result => result.group).join(', ') || 'none';
+    const unsentGroups = unsentResults.map(result => `${result.group} (${result.message})`).join('; ') || 'none';
+    sendSuccessAlert(
+      `Attendance summary run completed for ${period.label}. Slack accepted ${sentResults.length} of ${SUMMARY_GROUPS.length} group message(s) for delivery.`,
+      {
+        functionName: 'sendScheduledSummaries',
+        additionalInfo: `Sent: ${sentGroups}. Not sent: ${unsentGroups}.`
+      }
+    );
+  }
+
+  return {
+    success: true,
+    period: period,
+    dryRun: dryRun,
+    test: testMode,
+    results: results,
+    sent: sentResults.length,
+    notSent: unsentResults.length
+  };
 }
 
 // ---------------------------------------------------------------------------

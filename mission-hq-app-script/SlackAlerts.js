@@ -65,6 +65,40 @@ function sendErrorAlert(errorMessage, context) {
   }
 }
 
+// Posts a non-deduplicated status alert after a real attendance summary run.
+// It never throws into the summary flow or changes the run result.
+function sendSuccessAlert(message, context) {
+  context = context || {};
+  try {
+    const props = PropertiesService.getScriptProperties();
+    const token = props.getProperty('HV_AUTOMATION_BOT_TOKEN');
+    const channel = props.getProperty('ALERT_CHANNEL_ID');
+    if (!token || !channel) {
+      Logger.log('sendSuccessAlert: HV_AUTOMATION_BOT_TOKEN or ALERT_CHANNEL_ID not set — skipping.');
+      return;
+    }
+
+    const fn = context.functionName || 'unknown';
+    const details = context.additionalInfo || '';
+    let text = ':white_check_mark: *MissionHQ Attendance Update*\n\n';
+    text += message + '\n';
+    text += '*Function:* `' + fn + '`\n';
+    if (details) text += '*Details:* ' + details + '\n';
+
+    const resp = UrlFetchApp.fetch('https://slack.com/api/chat.postMessage', {
+      method: 'post',
+      contentType: 'application/json; charset=utf-8',
+      headers: { Authorization: 'Bearer ' + token },
+      payload: JSON.stringify({ channel: channel, text: text, unfurl_links: false }),
+      muteHttpExceptions: true,
+    });
+    const json = JSON.parse(resp.getContentText());
+    if (!json.ok) Logger.log('sendSuccessAlert failed: ' + json.error);
+  } catch (e) {
+    Logger.log('sendSuccessAlert threw: ' + (e && e.message ? e.message : e));
+  }
+}
+
 // Run ONCE from the editor to verify the alert path (token + channel + bot
 // membership). Posts a test message to #automation-alerts.
 function testMissionHqAlert() {
