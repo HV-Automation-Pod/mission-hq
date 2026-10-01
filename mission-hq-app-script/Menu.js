@@ -8,7 +8,6 @@ function onOpen() {
     .addItem("Preview Slack vs Zoho", "previewSlackAccountsNotInZoho")
     .addItem("Apply Attendance Prompt Decisions", "applyAttendancePromptDecisions")
     .addItem("Preview Attendance Prompt Decisions", "previewAttendancePromptDecisions")
-    .addItem("Diagnose Attendance Prompt", "diagnoseAttendancePrompt")
     .addSeparator()
     .addItem("Mark WFO Exempt…", "promptMarkWfoExempt")
     .addSeparator()
