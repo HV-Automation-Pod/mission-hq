@@ -550,7 +550,14 @@ Notes                     free text
 
 The merge is keyed on **Email** (`SLACK_AUDIT_KEY_HEADER`) and every column is
 read by **header name**, so inserting a column by hand cannot shift answers into
-a machine column. A full rewrite would throw away the decision the report exists
+a machine column.
+
+**The write is values-only.** No `sheet.clear()` (`Range.clear()` takes data
+validation with it), no validation rule of its own, no column resizing after the
+first run. The yes/no dropdown on the decision column belongs to whoever set up
+the sheet — a competing lowercase `yes`/`no` rule flagged every hand-typed `Yes`
+as invalid. Stale rows below the data are cleared by **content**, within this
+script's own columns only, so a column added to the right survives. A full rewrite would throw away the decision the report exists
 to collect — `readSlackAuditSheet_()` → `mergeSlackAuditRows_()` →
 `writeSlackAuditSheet_()` is that merge, do not collapse it back into a rewrite.
 

@@ -413,13 +413,18 @@ function readSlackAuditSheet_() {
 function writeSlackAuditSheet_(rows) {
   const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
   let sheet = spreadsheet.getSheetByName(SLACK_AUDIT_SHEET_NAME);
+  let created = false;
   if (!sheet) {
     sheet = spreadsheet.insertSheet(SLACK_AUDIT_SHEET_NAME);
+    created = true;
     Logger.log(`Created the "${SLACK_AUDIT_SHEET_NAME}" tab.`);
   }
 
-  sheet.clear();
-  sheet.clearConditionalFormatRules();
+  // Values only — never sheet.clear(), and no data validation of our own.
+  // Range.clear() takes the data-validation rules with it, and the yes/no
+  // dropdown on the decision column is the sheet owner's, not this script's.
+  // Writing a competing rule also flags every hand-typed "Yes" as invalid,
+  // which is what the red corner markers on that column were.
   const width = SLACK_AUDIT_HEADERS.length;
   const header = sheet.getRange(1, 1, 1, width);
   header.setValues([SLACK_AUDIT_HEADERS]);
@@ -438,21 +443,20 @@ function writeSlackAuditSheet_(rows) {
       row.firstSeen,
       row.lastChecked
     ]));
+  }
 
-    // yes/no on the decision column, so it is one click and the value stays a
-    // value the prompt flow can match on rather than free text.
-    const promptCol = SLACK_AUDIT_HEADERS.indexOf(SLACK_AUDIT_PROMPT_HEADER) + 1;
-    sheet.getRange(2, promptCol, rows.length, 1).setDataValidation(
-      SpreadsheetApp.newDataValidation()
-        .requireValueInList(["yes", "no"], true)
-        .setAllowInvalid(true)
-        .setHelpText('yes = this person should get the daily attendance prompt')
-        .build()
-    );
+  // The list shrinks when accounts resolve, so stale rows underneath have to
+  // go — but by CONTENT only, within our own columns. A column somebody added
+  // to the right of ours, and the formatting and validation on this one, are
+  // none of this script's business.
+  const lastRow = sheet.getLastRow();
+  const firstStale = rows.length + 2;
+  if (lastRow >= firstStale) {
+    sheet.getRange(firstStale, 1, lastRow - firstStale + 1, width).clearContent();
   }
 
   sheet.setFrozenRows(1);
-  sheet.autoResizeColumns(1, width);
+  if (created) sheet.autoResizeColumns(1, width);
 
   sheet.getRange(1, 1).setNote(
     `Refreshed by auditSlackAccountsNotInZoho(), at the end of every employee sync.\n\n` +
