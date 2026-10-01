@@ -45,6 +45,12 @@
 // Resume checkpoint: the last MissionHQ Log row index already scanned.
 const MISSED_SCAN_CURSOR_PROPERTY = "MISSED_RESPONSE_SCAN_ROW";
 
+// Resume checkpoint for the hand-run date-range scans, stored as
+// {"key":"fix:2026-09-16..2026-09-30","row":418}. Keyed by the range so that
+// changing FROM_DATE/TO_DATE starts from the top instead of silently resuming
+// someone else's range partway down the sheet.
+const MISSED_SCAN_RANGE_CURSOR_PROPERTY = "MISSED_RESPONSE_RANGE_CURSOR";
+
 // Stop and checkpoint before Apps Script's 6-minute execution cap kills the run.
 const MISSED_SCAN_TIME_BUDGET_MS = 4.5 * 60 * 1000;
 
@@ -71,16 +77,23 @@ const MISSED_SCAN_CONFIRMATION_RE =
 // every run small and predictable, and a rotating offset gets the same coverage
 // out of a trigger that fires often rather than a run that does a lot.
 //
-// Offset 1 is yesterday, 2 the day before, up to MISSED_SCAN_SWEEP_WINDOW_DAYS,
-// then back to 1. Today is deliberately NOT in the rotation: it is still being
-// answered, and the reminder run's own pre-send DM check covers it live.
+// Offset 1 is the last WORKING day, 2 the one before it, up to
+// MISSED_SCAN_SWEEP_WINDOW_DAYS, then back to 1. Today is deliberately NOT in
+// the rotation: it is still being answered, and the reminder run's own pre-send
+// DM check covers it live.
+//
+// Working days, not calendar days. The rotation used to walk calendar days, so
+// two offsets in every seven landed on a Saturday or a Sunday — days with no
+// date column, nothing to sweep, and a wasted slot. Counting working days
+// instead puts all seven offsets on days that can actually have lost a
+// response, and widens real coverage to ~9-10 calendar days for free.
 const MISSED_SCAN_SWEEP_WINDOW_DAYS = 7;
 
 // Where the rotation has got to. Holds the offset the NEXT run will use.
 const MISSED_SCAN_SWEEP_OFFSET_PROPERTY = "MISSED_RESPONSE_SWEEP_OFFSET";
 
 // How often the sweep trigger fires. At 4 hours that is 6 runs a day, so the
-// 7-day window comes round roughly every 28 hours.
+// 7-working-day window comes round roughly every 28 hours.
 const MISSED_SCAN_SWEEP_TRIGGER_HOURS = 4;
 
 // doPost's own DUMP breadcrumbs.
@@ -111,12 +124,84 @@ function fixMissedResponses(fromDate, toDate) {
   return runMissedResponseScan_({ dryRun: false, fromDate: fromDate, toDate: toDate });
 }
 
+// ---------------------------------------------------------------------------
+// Run one specific day by hand
+//
+// The editor's Run button calls with no arguments, so previewMissedResponses()
+// started from there scans EVERY date column in the sheet — the full historical
+// backfill, not one day. These two are the one-day version: edit DATE, pick the
+// function in the Run dropdown, hit Run.
+//
+// ignoreCursor is what makes them safe to run ad hoc. The scan checkpoints its
+// progress for the long backfill, so a leftover cursor would make a one-day run
+// start partway down the sheet and silently skip everyone above it. The rolling
+// sweep passes the same flag for the same reason.
+// ---------------------------------------------------------------------------
+
+/** DRY RUN for one day. Logs what it would recover, writes nothing. */
+function previewOneDay() {
+  const DATE = "2026-10-01"; // <-- edit this (yyyy-MM-dd)
+  return runMissedResponseScan_({ dryRun: true, fromDate: DATE, toDate: DATE, ignoreCursor: true });
+}
+
+/** REAL RUN for one day. Writes the recovered status into each Pending cell. */
+function fixOneDay() {
+  const DATE = "2026-10-01"; // <-- edit this (yyyy-MM-dd)
+  return runMissedResponseScan_({ dryRun: false, fromDate: DATE, toDate: DATE, ignoreCursor: true });
+}
+
+// ---------------------------------------------------------------------------
+// Run a date RANGE by hand (e.g. the last 15 days)
+//
+// FROM_DATE and TO_DATE are both INCLUSIVE and the order does not matter: the
+// scan sorts them. A backwards range (from=2026-09-30, to=2026-09-15) used to
+// match zero date columns and report "nothing to scan" over a sheet that had
+// every one of those days in it.
+//
+// Several dates cost barely more than one. The scan walks the sheet ONCE and
+// reads each employee's DM ONCE no matter how many date columns are in scope —
+// the extra dates only widen the history window. What a range does add is
+// rows: more people have at least one Pending cell, and every such person
+// costs a rate-limited Slack call, so a 15-day range over a long sheet can run
+// into the 6-minute cap.
+//
+// So these two checkpoint their progress and resume, unlike the one-day pair.
+// Run the same function again until the summary says COMPLETE. The checkpoint
+// is keyed to the range and to preview-vs-fix, so editing the dates (or
+// switching between the two functions) restarts cleanly from the first row.
+// ---------------------------------------------------------------------------
+
+/** DRY RUN for a date range. Logs what it would recover, writes nothing. */
+function previewDateRange() {
+  const FROM_DATE = "2026-09-16"; // <-- edit this (yyyy-MM-dd, inclusive)
+  const TO_DATE = "2026-09-30";   // <-- edit this (yyyy-MM-dd, inclusive)
+  return runMissedResponseScan_({
+    dryRun: true, fromDate: FROM_DATE, toDate: TO_DATE, resumable: true
+  });
+}
+
+/** REAL RUN for a date range. Writes the recovered status into each Pending cell. */
+function fixDateRange() {
+  const FROM_DATE = "2026-09-16"; // <-- edit this (yyyy-MM-dd, inclusive)
+  const TO_DATE = "2026-09-30";   // <-- edit this (yyyy-MM-dd, inclusive)
+  return runMissedResponseScan_({
+    dryRun: false, fromDate: FROM_DATE, toDate: TO_DATE, resumable: true
+  });
+}
+
+/** Forgets where the range scans got to, so the next one starts from row 2. */
+function resetDateRangeScan() {
+  PropertiesService.getScriptProperties().deleteProperty(MISSED_SCAN_RANGE_CURSOR_PROPERTY);
+  Logger.log("Date-range scan checkpoint cleared — the next range run starts from row 2.");
+}
+
 /**
  * ROTATING SAFETY NET — wire this to an hourly trigger (see
  * createMissedResponseSweepTrigger).
  *
- * Each run repairs exactly ONE day, walking backwards: yesterday, then the day
- * before, and so on to MISSED_SCAN_SWEEP_WINDOW_DAYS, then back to yesterday.
+ * Each run repairs exactly ONE day, walking backwards through WORKING days:
+ * the last working day, then the one before it, and so on to
+ * MISSED_SCAN_SWEEP_WINDOW_DAYS, then back to the start.
  * Whatever breaks in the chain — the edge function's forward, doPost dying
  * mid-write, a stale-snapshot overwrite — it is caught within one turn of the
  * rotation and said out loud in #automation-alerts.
@@ -143,18 +228,18 @@ function rollingMissedResponseSweep() {
   const nextOffset = (offset % MISSED_SCAN_SWEEP_WINDOW_DAYS) + 1;
   props.setProperty(MISSED_SCAN_SWEEP_OFFSET_PROPERTY, nextOffset.toString());
 
-  // Built from the timezone-formatted date rather than by subtracting from a raw
-  // Date, so a run near midnight cannot land on the wrong day.
-  const parts = Utilities.formatDate(new Date(), "Asia/Kolkata", "yyyy-MM-dd").split("-");
-  const target = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]));
-  target.setDate(target.getDate() - offset);
-  const sweepDate = Utilities.formatDate(target, "Asia/Kolkata", "yyyy-MM-dd");
+  const sweepDate = nthPreviousBusinessDay_(offset);
+  if (!sweepDate) {
+    // Only reachable if the holiday list somehow swallowed weeks at a time.
+    Logger.log(`No working day found at offset ${offset} — nothing to sweep.`);
+    return { success: true, complete: true, written: 0, unrecoverable: 0, pendingCells: 0 };
+  }
 
   const fromDate = sweepDate;
   const toDate = sweepDate;
   Logger.log(
-    `Rolling sweep: offset ${offset} of ${MISSED_SCAN_SWEEP_WINDOW_DAYS} -> ${sweepDate}. ` +
-    `Next run takes offset ${nextOffset}.`
+    `Rolling sweep: offset ${offset} of ${MISSED_SCAN_SWEEP_WINDOW_DAYS} working day(s) back ` +
+    `-> ${sweepDate}. Next run takes offset ${nextOffset}.`
   );
 
   let result;
@@ -176,6 +261,20 @@ function rollingMissedResponseSweep() {
         'Responses confirmed in Slack may be missing from the sheet and are NOT being repaired.',
     });
     throw error;
+  }
+
+  // Weekends and holidays have no date column at all. The rotation walks
+  // CALENDAR days, so two runs in every seven land on a Saturday or a Sunday
+  // and there is simply nothing to sweep. Returning here keeps that out of the
+  // "did not finish" branch below — a run that had no work to do is not a run
+  // that ran out of time, and alerting on it twice a week trains people to
+  // ignore the alert that matters.
+  if (result.coverage && result.coverage.columns === 0) {
+    Logger.log(
+      `No date column for ${sweepDate} — weekend, holiday, or a day no prompts went out. ` +
+      `Nothing to sweep.`
+    );
+    return result;
   }
 
   if (result.written > 0 || result.unrecoverable > 0) {
@@ -203,11 +302,37 @@ function rollingMissedResponseSweep() {
         `Sweeping *${sweepDate}* it reached only sheet row ${result.lastRow} of ${result.totalRows}; ` +
         `rows after that were not checked, and anything lost below that row is still \`Pending\`. ` +
         `One date should never take this long — check the row count. ` +
-        `Run \`fixMissedResponses('${sweepDate}', '${sweepDate}')\` to finish the job.`,
+        `Set FROM_DATE and TO_DATE to *${sweepDate}* in \`fixDateRange()\` and run it to finish the ` +
+        `job — it checkpoints, so re-run it until it says COMPLETE.`,
     });
   }
 
   return result;
+}
+
+/**
+ * The `offset`-th most recent WORKING day, as yyyy-MM-dd. Offset 1 is the last
+ * working day before today; weekends and company holidays are stepped over.
+ *
+ * Built from the timezone-formatted date rather than by subtracting from a raw
+ * Date, so a run near midnight cannot land on the wrong day. Weekend/holiday
+ * tests come from WorkCalendar.js, which is the single place the holiday list
+ * is maintained.
+ */
+function nthPreviousBusinessDay_(offset) {
+  const parts = Utilities.formatDate(new Date(), "Asia/Kolkata", "yyyy-MM-dd").split("-");
+  const cursor = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]));
+
+  // Seven working days never sit more than ~14 calendar days back, even across
+  // a holiday week. The bound is a runaway guard, not a limit meant to bite.
+  let found = 0;
+  for (let step = 0; step < 40; step++) {
+    cursor.setDate(cursor.getDate() - 1);
+    if (!isBusinessDay(cursor)) continue;
+    found++;
+    if (found === offset) return Utilities.formatDate(cursor, "Asia/Kolkata", "yyyy-MM-dd");
+  }
+  return "";
 }
 
 /**
@@ -324,10 +449,37 @@ function runMissedResponseScan_(options) {
     throw new Error("Required columns (Full Name, Email Address) not found");
   }
 
-  const dateColumns = collectDateColumns_(headers, options.fromDate, options.toDate);
+  // Inclusive, order-insensitive. A backwards range is a typo, not a request
+  // for an empty scan, so it is corrected and said out loud rather than
+  // silently matching nothing.
+  const range = resolveDateRange_(options.fromDate, options.toDate);
+  const dateColumns = collectDateColumns_(headers, range.from, range.to);
+  const coverage = describeDateCoverage_(headers, dateColumns, range);
+
+  if (range.swapped) {
+    Logger.log(
+      `NOTE: fromDate (${range.given.from}) is later than toDate (${range.given.to}) — ` +
+      `reading the range as ${range.from} .. ${range.to}.`
+    );
+  }
+  logDateCoverage_(coverage);
+
   if (dateColumns.length === 0) {
     Logger.log("No date columns in range — nothing to scan.");
-    return { success: true, scanned: 0, recovered: 0 };
+    if (coverage.sheetDateColumns === 0) {
+      Logger.log("The sheet has no date columns at all — check CANDIDATE_SHEET_NAME and the header row.");
+    } else {
+      Logger.log(
+        `The sheet does have ${coverage.sheetDateColumns} date column(s), ` +
+        `${coverage.sheetOldest} .. ${coverage.sheetNewest}. ` +
+        `Nothing overlaps ${range.from || "(sheet start)"} .. ${range.to || "(sheet end)"}.`
+      );
+    }
+    return {
+      success: true, complete: true, dryRun: dryRun, coverage: coverage,
+      scanned: 0, recovered: 0, pendingCells: 0, missed: 0, unanswered: 0,
+      written: 0, repaired: [], unrecoverable: 0, lastRow: 0, totalRows: data.length - 1
+    };
   }
 
   // Duplicate date columns are their own failure mode: ProcessData matches the
@@ -347,9 +499,16 @@ function runMissedResponseScan_(options) {
   const dumpIndex = buildDumpIndex_();
 
   const props = PropertiesService.getScriptProperties();
-  const startRow = options.ignoreCursor
-    ? 1
-    : parseInt(props.getProperty(MISSED_SCAN_CURSOR_PROPERTY) || "1", 10);
+  // Range runs keep their own checkpoint, keyed to the range, so they can be
+  // re-run until they finish without inheriting the backfill's cursor.
+  const resumeKey = options.resumable
+    ? `${dryRun ? "preview" : "fix"}:${range.from || "*"}..${range.to || "*"}`
+    : "";
+  const startRow = resumeKey
+    ? readRangeCursor_(props, resumeKey)
+    : (options.ignoreCursor
+        ? 1
+        : parseInt(props.getProperty(MISSED_SCAN_CURSOR_PROPERTY) || "1", 10));
 
   Logger.log("=".repeat(78));
   Logger.log(`Missed-response scan — ${mode}`);
@@ -371,6 +530,10 @@ function runMissedResponseScan_(options) {
   const byDate = {};
   const byHour = {};
   const byVerdict = {};
+  // Per-date totals, so the summary can say what happened to EVERY day in the
+  // range and not only to the days that turned out to have lost something.
+  const pendingByDate = {};
+  const unansweredByDate = {};
   let usersChecked = 0;
   let pendingCells = 0;
   let unanswered = 0;
@@ -396,6 +559,9 @@ function runMissedResponseScan_(options) {
       .map(col => ({ date: col.date, index: col.index }));
     if (pending.length === 0) continue;
     pendingCells += pending.length;
+    pending.forEach(cell => {
+      pendingByDate[cell.date] = (pendingByDate[cell.date] || 0) + 1;
+    });
 
     let slackId = slackIdColIndex !== -1 ? (row[slackIdColIndex] || "").toString().trim() : "";
     if (!slackId) {
@@ -422,6 +588,7 @@ function runMissedResponseScan_(options) {
       const hit = confirmations.byDate[cell.date];
       if (!hit) {
         unanswered++;
+        unansweredByDate[cell.date] = (unansweredByDate[cell.date] || 0) + 1;
         continue; // genuinely never answered — leave it Pending
       }
 
@@ -503,7 +670,16 @@ function runMissedResponseScan_(options) {
   }
 
   const complete = !timedOut;
-  if (!options.ignoreCursor) {
+  if (resumeKey) {
+    if (complete) {
+      props.deleteProperty(MISSED_SCAN_RANGE_CURSOR_PROPERTY);
+    } else {
+      props.setProperty(
+        MISSED_SCAN_RANGE_CURSOR_PROPERTY,
+        JSON.stringify({ key: resumeKey, row: lastRow })
+      );
+    }
+  } else if (!options.ignoreCursor) {
     if (complete) {
       props.deleteProperty(MISSED_SCAN_CURSOR_PROPERTY);
     } else {
@@ -526,6 +702,10 @@ function runMissedResponseScan_(options) {
     byDate: byDate,
     byHour: byHour,
     byVerdict: byVerdict,
+    pendingByDate: pendingByDate,
+    unansweredByDate: unansweredByDate,
+    coverage: coverage,
+    resumable: !!resumeKey,
     dumpWindowStart: dumpIndex.windowStart
   });
 
@@ -534,6 +714,7 @@ function runMissedResponseScan_(options) {
     success: true,
     dryRun: dryRun,
     complete: complete,
+    coverage: coverage,
     pendingCells: pendingCells,
     missed: findings.length,
     unanswered: unanswered,
@@ -569,6 +750,153 @@ function collectDateColumns_(headers, fromDate, toDate) {
   // pending date" used as the Slack history floor is always correct.
   columns.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
   return columns;
+}
+
+/**
+ * Normalises the two optional bounds into an inclusive, correctly ordered
+ * range. Either end may be blank, which means "open".
+ *
+ * Swapping rather than rejecting is deliberate: a hand-edited FROM/TO pair in
+ * the wrong order is the single most likely mistake here, and the old
+ * behaviour — every column failing both `date >= from` and `date <= to` — made
+ * it look like the sheet had no such dates at all.
+ */
+function resolveDateRange_(fromDate, toDate) {
+  const from = normalizeDateArg_(fromDate, "fromDate");
+  const to = normalizeDateArg_(toDate, "toDate");
+  if (from && to && from > to) {
+    return { from: to, to: from, swapped: true, given: { from: from, to: to } };
+  }
+  return { from: from, to: to, swapped: false, given: { from: from, to: to } };
+}
+
+/**
+ * One bound as yyyy-MM-dd. Anything that is not blank and not a date throws:
+ * a typo like "2026-9-16" compares as a string against the headers and would
+ * quietly select the wrong columns.
+ */
+function normalizeDateArg_(value, label) {
+  if (value === undefined || value === null) return "";
+  if (value instanceof Date) return Utilities.formatDate(value, "Asia/Kolkata", "yyyy-MM-dd");
+  const text = value.toString().trim();
+  if (!text) return "";
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return text;
+  const normalized = normalizeDateHeader_(text);
+  if (!normalized) {
+    throw new Error(`${label} is not a date: "${text}". Use yyyy-MM-dd, e.g. "2026-09-16".`);
+  }
+  Logger.log(`NOTE: ${label} "${text}" read as ${normalized}.`);
+  return normalized;
+}
+
+/** Every calendar day from..to inclusive. Empty when either end is open. */
+function enumerateDates_(from, to) {
+  const out = [];
+  if (!from || !to) return out;
+  const cursor = new Date(`${from}T00:00:00+05:30`);
+  const end = new Date(`${to}T00:00:00+05:30`);
+  // A hand-typed year typo should not spin for a decade.
+  while (cursor <= end && out.length < 400) {
+    out.push(Utilities.formatDate(cursor, "Asia/Kolkata", "yyyy-MM-dd"));
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  return out;
+}
+
+/**
+ * What the requested range actually matched: which days have a column, which
+ * do not, and what the sheet holds overall. The "missing" list is the honest
+ * answer to "did it really cover the last 15 days" — weekends and holidays
+ * have no column and are expected there, a working day is not.
+ */
+function describeDateCoverage_(headers, dateColumns, range) {
+  const sheetDates = [];
+  for (let i = 0; i < headers.length; i++) {
+    const date = normalizeDateHeader_(headers[i]);
+    if (date) sheetDates.push(date);
+  }
+  sheetDates.sort();
+
+  const seen = {};
+  const covered = [];
+  dateColumns.forEach(col => {
+    if (seen[col.date]) return;
+    seen[col.date] = true;
+    covered.push(col.date);
+  });
+  covered.sort();
+
+  const requested = enumerateDates_(range.from, range.to);
+  return {
+    from: range.from,
+    to: range.to,
+    requested: requested,
+    requestedDays: requested.length,
+    covered: covered,
+    missing: requested.filter(date => !seen[date]),
+    columns: dateColumns.length,
+    sheetDateColumns: sheetDates.length,
+    sheetOldest: sheetDates[0] || "",
+    sheetNewest: sheetDates[sheetDates.length - 1] || ""
+  };
+}
+
+/** Prints the coverage BEFORE the slow part, so a bad range is caught early. */
+function logDateCoverage_(coverage) {
+  const line = "-".repeat(78);
+  Logger.log(line);
+  if (!coverage.from && !coverage.to) {
+    Logger.log("Date range requested        : (none) — every date column in the sheet");
+  } else {
+    Logger.log(
+      `Date range requested        : ${coverage.from || "(sheet start)"} .. ${coverage.to || "(sheet end)"}` +
+      (coverage.requestedDays ? `  = ${coverage.requestedDays} calendar day(s)` : "")
+    );
+  }
+  Logger.log(
+    `Date columns in scope       : ${coverage.columns}` +
+    (coverage.covered.length ? `  (${coverage.covered.join(", ")})` : "")
+  );
+  if (coverage.requestedDays) {
+    Logger.log(`Requested days WITH a column: ${coverage.covered.length} of ${coverage.requestedDays}`);
+    if (coverage.missing.length) {
+      Logger.log(`Requested days with NO column: ${coverage.missing.length}  (${coverage.missing.join(", ")})`);
+      Logger.log("   Weekends and holidays have no column — expected. A working day here is not.");
+    } else {
+      Logger.log("Requested days with NO column: 0 — every day in the range has a column");
+    }
+  }
+  Logger.log(
+    `Date columns in whole sheet : ${coverage.sheetDateColumns}` +
+    (coverage.sheetDateColumns ? `  (${coverage.sheetOldest} .. ${coverage.sheetNewest})` : "")
+  );
+  Logger.log(line);
+}
+
+/**
+ * The range checkpoint, but only when it belongs to THIS range. A checkpoint
+ * left by a different range (or by the preview of this one) would start the
+ * run partway down the sheet and silently skip everyone above it.
+ */
+function readRangeCursor_(props, resumeKey) {
+  const raw = props.getProperty(MISSED_SCAN_RANGE_CURSOR_PROPERTY);
+  if (!raw) return 1;
+  let stored;
+  try {
+    stored = JSON.parse(raw);
+  } catch (error) {
+    Logger.log(`Range checkpoint unreadable (${error.message}) — starting from the first row.`);
+    return 1;
+  }
+  if (!stored || stored.key !== resumeKey) {
+    Logger.log(
+      `Range checkpoint belongs to "${(stored && stored.key) || "?"}", this run is "${resumeKey}" — ` +
+      `starting from the first row.`
+    );
+    return 1;
+  }
+  const row = parseInt(stored.row, 10);
+  return row > 1 ? row : 1;
 }
 
 /**
@@ -971,10 +1299,8 @@ function logMissedResponseSummary_(report) {
   }
 
   Logger.log(line);
-  Logger.log("Missed responses by date (which days lost data):");
-  Object.keys(report.byDate).sort().forEach(date => {
-    Logger.log(`  ${date}  ${"#".repeat(Math.min(report.byDate[date], 60))} ${report.byDate[date]}`);
-  });
+  Logger.log("Per-date breakdown — every day in the requested range, not only the lossy ones:");
+  logPerDateTable_(report);
 
   Logger.log(line);
   Logger.log("Missed responses by submit hour, IST (tests the burst/concurrency theory):");
@@ -1000,4 +1326,50 @@ function logMissedResponseSummary_(report) {
   if (report.dryRun && report.findings.length) {
     Logger.log("Dry run — nothing was written. Run fixMissedResponses() to apply these.");
   }
+
+  if (report.resumable && !report.complete) {
+    Logger.log(
+      `PAUSED at data row ${report.lastRow} of ${report.totalRows} — run the SAME function again ` +
+      `to carry on from there. The dates above only count the rows scanned so far.`
+    );
+  }
+}
+
+/**
+ * One line per day in the range: did it have a column at all, how many cells
+ * were stuck on Pending, how many of those the employee had actually answered
+ * in Slack, how many of those can be turned back into a sheet value, how many
+ * were written, and how many were simply never answered.
+ *
+ * Days with no column are listed too. Leaving them out is how a run that
+ * covered 11 of 15 days reads as if it covered all 15.
+ */
+function logPerDateTable_(report) {
+  const coverage = report.coverage;
+  const dates = (coverage && coverage.requestedDays)
+    ? coverage.requested.slice()
+    : Object.keys(report.pendingByDate || {}).sort();
+
+  if (!dates.length) {
+    Logger.log("  (no dates in scope)");
+    return;
+  }
+
+  const hasColumn = {};
+  (coverage ? coverage.covered : dates).forEach(date => { hasColumn[date] = true; });
+
+  const pad = (value, width) => (value.toString() + " ".repeat(width)).slice(0, width);
+  Logger.log("  date        column  pending  answered  recoverable  written  never-answered");
+  dates.forEach(date => {
+    const forDate = report.findings.filter(f => f.date === date);
+    Logger.log(
+      "  " + pad(date, 12) + pad(hasColumn[date] ? "yes" : "NO", 8) +
+      pad(report.pendingByDate[date] || 0, 9) + pad(forDate.length, 10) +
+      pad(forDate.filter(f => f.value).length, 13) +
+      pad(forDate.filter(f => f.written).length, 9) +
+      (report.unansweredByDate[date] || 0)
+    );
+  });
+  Logger.log("  pending = cells still saying Pending | answered = the user did reply in Slack");
+  Logger.log("  recoverable = that reply names an option we can map back to a sheet value");
 }
