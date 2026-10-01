@@ -93,9 +93,20 @@ function markExitedEmployees(options) {
   const grid = sheet.getRange(2, 1, rowCount, sheet.getLastColumn()).getDisplayValues();
   const exemptValues = sheet.getRange(2, exemptCol.index + 1, rowCount, 1).getDisplayValues();
 
+  // An explicit "Send Attendance Prompt? = yes" on the Slack vs Zoho tab is a
+  // human saying this person is employed and should be checked in. It outranks
+  // both signals below — it is the override for exactly the case that fools
+  // them, a live employee whose Zoho record sits under a different email.
+  //
+  // Without this the two jobs fight every morning: the sweep marks them exempt,
+  // the prompt flow clears it again, and the summary reports whichever ran
+  // last.
+  const promptAllowlist = attendancePromptAllowlist_();
+
   const today = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd");
   const candidates = [];
   let liveRows = 0;
+  let overridden = 0;
 
   for (let i = 0; i < rowCount; i++) {
     const row = grid[i];
@@ -119,6 +130,15 @@ function markExitedEmployees(options) {
     }
 
     if (reasons.length === 0) continue;
+
+    if (promptAllowlist[email]) {
+      Logger.log(
+        `${email} looks exited (${reasons.join(" + ")}) but is marked ` +
+        `"${SLACK_AUDIT_PROMPT_HEADER} = yes" on the ${SLACK_AUDIT_SHEET_NAME} tab — left active.`
+      );
+      overridden++;
+      continue;
+    }
 
     candidates.push({
       rowIndex: i,
@@ -147,7 +167,10 @@ function markExitedEmployees(options) {
   }
 
   if (candidates.length === 0) {
-    Logger.log(`Offboarding sweep: nobody to mark (${liveRows} live row(s) checked).`);
+    Logger.log(
+      `Offboarding sweep: nobody to mark (${liveRows} live row(s) checked` +
+      (overridden ? `, ${overridden} kept active by the ${SLACK_AUDIT_SHEET_NAME} tab` : "") + `).`
+    );
     // Same shape as the dry-run return below, so a caller never has to special-
     // case "found nothing" separately from "found some".
     return {

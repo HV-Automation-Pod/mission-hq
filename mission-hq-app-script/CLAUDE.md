@@ -577,15 +577,56 @@ It alerts `#automation-alerts` **only when somebody NEW appears**, as one messag
 naming them all (`sendSuccessAlert`, which does not dedupe). The standing list
 lives on the tab; reposting it daily is how an alert becomes one nobody reads.
 
+### Acting on the answer: `yes` -> a MissionHQ Log row
+
+`applyAttendancePromptDecisions()` reads the tab and routes every `yes` into the
+**MissionHQ Log**, rather than teaching the prompt flow a second source. A person
+who should be prompted needs a Log row anyway: the daily flow, the reminder, the
+recovery sweep and every summary read that one sheet. Prompt them from somewhere
+else and they would get the DM and still be invisible in every report.
+
+Two shapes of `yes`, needing opposite repairs:
+
+```text
+not in the Log      -> append a row (Slack id left blank; the daily flow
+                       resolves it from the email on its first pass)
+in the Log, exempt  -> clear the WFO Exempt cell
+```
+
+The second is the email-mismatch case — Anuja Nair, Gayathri Meka, Harshit
+Shrivastava are employed under a second address, so the offboarding sweep read
+them as leavers and silenced them. They do not need a row, they need un-silencing.
+
+It runs at the **top of `processEmailsAndSendSlackMessage()`**, before the sheet
+is read, so a decision made last night reaches the Log in time for this
+morning's prompt. Best-effort: one unreadable tab must never stop the whole org
+being checked in. Answers are matched **lower-cased** — the dropdown on that
+column is the sheet owner's and offers `Yes`/`No`.
+
+**The offboarding sweep honours the same answer.** `markExitedEmployees()` skips
+anyone marked `yes` (`attendancePromptAllowlist_()`), because an explicit human
+"this person is employed" outranks both of its signals — and it is the override
+for exactly the case that fools them. Without it the two jobs fight every
+morning: the sweep marks them exempt, the prompt flow clears it, and the
+fortnightly summary reports whichever ran last.
+
+Adding people is **alerted** like removing them is: it puts somebody into a daily
+DM and into a published ranking, so a wrong `yes` has to be visible enough to
+take back.
+
 ### Functions
 
 ```text
-auditSlackAccountsNotInZoho([options])     // options: { employees, dryRun }
-previewSlackAccountsNotInZoho()            // logs only, writes nothing, alerts nothing
-auditSlackAccountsNotInZohoBestEffort_()   // what the employee sync calls
+auditSlackAccountsNotInZoho([options])        // options: { employees, dryRun }
+previewSlackAccountsNotInZoho()               // logs only, writes nothing, alerts nothing
+auditSlackAccountsNotInZohoBestEffort_()      // what the employee sync calls
+applyAttendancePromptDecisions([options])     // yes -> MissionHQ Log row / un-exempt
+previewAttendancePromptDecisions()            // dry run
+attendancePromptAllowlist_()                  // the yes emails; read by the offboarding sweep
 ```
 
-Menu: **Audit Slack vs Zoho** / **Preview Slack vs Zoho**.
+Menu: **Audit Slack vs Zoho** / **Preview Slack vs Zoho** /
+**Apply Attendance Prompt Decisions** / **Preview Attendance Prompt Decisions**.
 
 ## Fortnightly Attendance Summaries (`FortnightlySummary.js`)
 

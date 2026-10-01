@@ -500,3 +500,233 @@ function alertNewSlackAuditRows_(rows) {
     }
   );
 }
+
+// ---------------------------------------------------------------------------
+// Acting on the decision: "Send Attendance Prompt? = yes" -> a MissionHQ Log row
+//
+// The tab is where a human answers "should this person still be checked in?".
+// Nothing read that answer until this, so a `yes` sat there doing nothing.
+//
+// The answer is applied by routing people into the MissionHQ Log rather than by
+// teaching the prompt flow a second source of truth. A person who should be
+// prompted needs a Log row anyway: the daily flow, the reminder flow, the
+// recovery sweep and every fortnightly summary all read that one sheet. Prompt
+// them from somewhere else and they would get the DM and still be invisible in
+// every report — a worse state than not being prompted at all.
+//
+// Two shapes of `yes`, and they need opposite repairs:
+//
+//   not in the Log      -> append a row. The daily flow fills the Slack id from
+//                          the email on its first pass.
+//   in the Log, exempt  -> clear the WFO Exempt cell. This is the email-mismatch
+//                          case (Anuja Nair, Gayathri Meka, Harshit Shrivastava):
+//                          employed, but under a second address, so the
+//                          offboarding sweep read them as leavers and silenced
+//                          them. They do not need a row, they need un-silencing.
+// ---------------------------------------------------------------------------
+
+/** Tab answers as { email: "yes" | "no" }, lower-cased on both sides. */
+function readAttendancePromptDecisions_() {
+  const decisions = {};
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SLACK_AUDIT_SHEET_NAME);
+  if (!sheet) return decisions;
+
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) return decisions;
+
+  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getDisplayValues()[0]
+    .map(header => header.toString().trim());
+  const emailCol = headers.indexOf(SLACK_AUDIT_KEY_HEADER);
+  const promptCol = headers.indexOf(SLACK_AUDIT_PROMPT_HEADER);
+  if (emailCol === -1 || promptCol === -1) return decisions;
+
+  const grid = sheet.getRange(2, 1, lastRow - 1, sheet.getLastColumn()).getDisplayValues();
+  grid.forEach(row => {
+    const email = (row[emailCol] || "").toString().trim().toLowerCase();
+    if (!email) return;
+    // Lower-cased because the dropdown on that column is the sheet owner's and
+    // offers "Yes"/"No"; matching on the exact string would silently ignore
+    // every answer the moment somebody re-cased the list.
+    const answer = (row[promptCol] || "").toString().trim().toLowerCase();
+    if (answer) decisions[email] = answer;
+  });
+  return decisions;
+}
+
+/** The emails answered `yes`, as a lookup. Used by the offboarding sweep too. */
+function attendancePromptAllowlist_() {
+  const allowed = {};
+  try {
+    const decisions = readAttendancePromptDecisions_();
+    Object.keys(decisions).forEach(email => {
+      if (decisions[email] === "yes") allowed[email] = true;
+    });
+  } catch (error) {
+    // A missing or malformed tab must never stop the daily prompt or the sweep.
+    Logger.log(`Could not read "${SLACK_AUDIT_SHEET_NAME}" decisions: ${error.message}`);
+  }
+  return allowed;
+}
+
+/**
+ * Moves everyone answered `yes` into the MissionHQ Log, and un-exempts the ones
+ * already there. Idempotent: a second run finds nothing to do.
+ *
+ * @param {Object} [options]
+ * @param {boolean} [options.dryRun] log what would change, write nothing.
+ */
+function applyAttendancePromptDecisions(options) {
+  options = options || {};
+  const dryRun = options.dryRun === true;
+
+  const decisions = readAttendancePromptDecisions_();
+  const wanted = Object.keys(decisions).filter(email => decisions[email] === "yes");
+  if (!wanted.length) {
+    Logger.log(`No "${SLACK_AUDIT_PROMPT_HEADER} = yes" rows on the "${SLACK_AUDIT_SHEET_NAME}" tab.`);
+    return { success: true, added: 0, unexempted: 0, alreadyActive: 0 };
+  }
+
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CANDIDATE_SHEET_NAME);
+  if (!sheet) throw new Error(`Sheet ${CANDIDATE_SHEET_NAME} not found`);
+
+  const lastRow = sheet.getLastRow();
+  const rowWidth = sheet.getLastColumn();
+  const headers = sheet.getRange(1, 1, 1, rowWidth).getDisplayValues()[0]
+    .map(header => header.toString().trim());
+  const emailColIndex = headers.indexOf("Email Address");
+  const nameColIndex = headers.indexOf("Full Name");
+  if (emailColIndex === -1 || nameColIndex === -1) {
+    throw new Error("Required columns (Full Name, Email Address) not found");
+  }
+  const slackIdColIndex = headers.indexOf(SLACK_USER_ID_COLUMN);
+  const exemptCol = getOrCreateColumnIndex_(sheet, WFO_EXEMPT_COLUMN);
+
+  const grid = lastRow > 1
+    ? sheet.getRange(2, 1, lastRow - 1, rowWidth).getDisplayValues()
+    : [];
+  const exemptValues = lastRow > 1
+    ? sheet.getRange(2, exemptCol.index + 1, lastRow - 1, 1).getDisplayValues()
+    : [];
+
+  const rowByEmail = {};
+  grid.forEach((row, index) => {
+    const email = (row[emailColIndex] || "").toString().trim().toLowerCase();
+    if (email && rowByEmail[email] === undefined) rowByEmail[email] = index;
+  });
+
+  // Names come off the audit tab, which took them from the Slack profile — the
+  // only name we have for somebody Zoho has never heard of.
+  const namesByEmail = {};
+  const auditRows = readSlackAuditSheet_();
+  Object.keys(auditRows).forEach(email => { namesByEmail[email] = auditRows[email].name; });
+
+  const added = [];
+  const unexempted = [];
+  let alreadyActive = 0;
+
+  wanted.forEach(email => {
+    const index = rowByEmail[email];
+
+    if (index === undefined) {
+      const row = new Array(rowWidth).fill("");
+      row[nameColIndex] = namesByEmail[email] || email;
+      row[emailColIndex] = email;
+      // The Slack id is left blank on purpose: the daily flow resolves it from
+      // the email on its first pass and writes it back, which is the same path
+      // every other new row takes. One fewer API call here, one fewer way for
+      // this to fail before the prompt even goes out.
+      if (slackIdColIndex !== -1) row[slackIdColIndex] = "";
+      added.push({ email: email, name: row[nameColIndex], row: row });
+      return;
+    }
+
+    if (isWfoExempt_(exemptValues[index][0])) {
+      unexempted.push({
+        email: email,
+        name: (grid[index][nameColIndex] || "").toString().trim() || email,
+        was: (exemptValues[index][0] || "").toString().trim(),
+        index: index
+      });
+      return;
+    }
+
+    alreadyActive++;
+  });
+
+  if (!added.length && !unexempted.length) {
+    Logger.log(
+      `Attendance prompt decisions: nothing to do — all ${wanted.length} "yes" row(s) ` +
+      `are already live in ${CANDIDATE_SHEET_NAME}.`
+    );
+    return { success: true, added: 0, unexempted: 0, alreadyActive: alreadyActive };
+  }
+
+  added.forEach(entry => Logger.log(`${dryRun ? "[dry run] would add" : "Adding"} to ${CANDIDATE_SHEET_NAME}: ${entry.name} <${entry.email}>`));
+  unexempted.forEach(entry => Logger.log(`${dryRun ? "[dry run] would clear" : "Clearing"} ${WFO_EXEMPT_COLUMN} for ${entry.name} <${entry.email}> (was "${entry.was}")`));
+
+  if (dryRun) {
+    return {
+      success: true, dryRun: true, added: 0, unexempted: 0,
+      wouldAdd: added.length, wouldUnexempt: unexempted.length, alreadyActive: alreadyActive
+    };
+  }
+
+  if (unexempted.length) {
+    unexempted.forEach(entry => { exemptValues[entry.index][0] = ""; });
+    sheet.getRange(2, exemptCol.index + 1, exemptValues.length, 1).setValues(exemptValues);
+  }
+  if (added.length) {
+    sheet.getRange(lastRow + 1, 1, added.length, rowWidth).setValues(added.map(entry => entry.row));
+  }
+  SpreadsheetApp.flush();
+
+  // Alerted because it puts people INTO a daily DM and into a published
+  // ranking. A wrong `yes` has to be visible enough to take back, the same way
+  // the offboarding sweep announces every row it silences.
+  sendSuccessAlert(
+    `${added.length + unexempted.length} person/people added to the daily attendance check-in`,
+    {
+      functionName: "applyAttendancePromptDecisions",
+      additionalInfo:
+        added.concat([]).map(entry => `• *${entry.name}* — ${entry.email} · new ${CANDIDATE_SHEET_NAME} row`)
+          .concat(unexempted.map(entry => `• *${entry.name}* — ${entry.email} · ${WFO_EXEMPT_COLUMN} cleared (was "${entry.was}")`))
+          .join("\n") +
+        `\n\nFrom *${SLACK_AUDIT_PROMPT_HEADER} = yes* on the *${SLACK_AUDIT_SHEET_NAME}* tab. ` +
+        `Set it back to \`no\` to undo — a new row still needs deleting by hand.`
+    }
+  );
+
+  const message =
+    `Attendance prompt decisions: added ${added.length} row(s), cleared ${WFO_EXEMPT_COLUMN} on ` +
+    `${unexempted.length}, ${alreadyActive} already live.`;
+  Logger.log(message);
+  return {
+    success: true, dryRun: false,
+    added: added.length, unexempted: unexempted.length, alreadyActive: alreadyActive,
+    names: added.map(entry => entry.name).concat(unexempted.map(entry => entry.name)),
+    message: message
+  };
+}
+
+/** Dry run: logs who would be added or un-exempted, writes nothing. */
+function previewAttendancePromptDecisions() {
+  return applyAttendancePromptDecisions({ dryRun: true });
+}
+
+/**
+ * What the daily prompt flow calls. Never throws into it: a problem reading one
+ * decision tab must not stop the whole org being checked in.
+ */
+function applyAttendancePromptDecisionsBestEffort_() {
+  try {
+    return applyAttendancePromptDecisions();
+  } catch (error) {
+    Logger.log(`Attendance prompt decisions skipped: ${error.message}`);
+    sendErrorAlert(
+      `Could not apply "${SLACK_AUDIT_PROMPT_HEADER}" decisions — anyone newly marked yes will ` +
+      `not be prompted today: ${error.message}`,
+      { functionName: "applyAttendancePromptDecisionsBestEffort_", sheetName: SLACK_AUDIT_SHEET_NAME }
+    );
+    return { success: false, added: 0, unexempted: 0, message: error.message };
+  }
+}

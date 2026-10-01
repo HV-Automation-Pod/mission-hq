@@ -29,6 +29,19 @@ function processEmailsAndSendSlackMessage() {
     };
   }
   try {
+    // "Send Attendance Prompt? = yes" on the Slack vs Zoho tab is somebody
+    // deciding that a person should be checked in. Apply those decisions BEFORE
+    // the sheet is read, so a decision made yesterday evening reaches the Log in
+    // time for this morning's prompt rather than tomorrow's. Once the row is in
+    // the Log there is nothing special about them — the loop below, the
+    // reminder, the recovery sweep and every summary treat them like anyone
+    // else, which is the whole reason this routes through the Log instead of
+    // prompting from a second list.
+    //
+    // Best-effort by construction: one unreadable decision tab must never stop
+    // the whole org being checked in.
+    applyAttendancePromptDecisionsBestEffort_();
+
     const props = PropertiesService.getScriptProperties();
     const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CANDIDATE_SHEET_NAME);
     if (!sheet) throw new Error(`Sheet ${CANDIDATE_SHEET_NAME} not found`);
