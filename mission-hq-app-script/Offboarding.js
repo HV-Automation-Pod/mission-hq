@@ -218,7 +218,9 @@ function forceMarkExitedEmployees() {
 
 /**
  * The whole Slack member directory in one paginated read, as
- * { ok, byEmail: {email: {id, deleted}}, byId: {id: {email, deleted}} }.
+ * { ok, byEmail: {email: entry}, byId: {id: entry} }, where an entry carries
+ * { id, email, deleted, realName, displayName, title, restricted,
+ *   ultraRestricted, admin, owner }.
  *
  * users.list rather than users.info per row: the Log is ~350 rows and this is
  * two or three requests instead of 350. Never throws — `ok: false` just means
@@ -251,7 +253,22 @@ function fetchSlackDirectory_() {
         const email = member.profile && member.profile.email
           ? member.profile.email.toString().trim().toLowerCase()
           : "";
-        const entry = { id: member.id, email: email, deleted: member.deleted === true };
+        // id/email/deleted are what the offboarding sweep reads; the rest is
+        // for the Slack-vs-Zoho audit, which has to describe an account the
+        // sheet has never seen.
+        const profile = member.profile || {};
+        const entry = {
+          id: member.id,
+          email: email,
+          deleted: member.deleted === true,
+          realName: (profile.real_name || member.real_name || "").toString().trim(),
+          displayName: (profile.display_name || "").toString().trim(),
+          title: (profile.title || "").toString().trim(),
+          restricted: member.is_restricted === true,
+          ultraRestricted: member.is_ultra_restricted === true,
+          admin: member.is_admin === true,
+          owner: member.is_owner === true
+        };
         byId[member.id] = entry;
         if (email) byEmail[email] = entry;
       });
