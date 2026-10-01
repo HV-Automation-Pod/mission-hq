@@ -514,6 +514,72 @@ markExitedEmployeesBestEffort_()   // logs + alerts, never throws into the calle
 fetchSlackDirectory_()             // whole Slack member list, { ok, byEmail, byId }
 ```
 
+## Slack vs Zoho Audit (`SlackZohoAudit.js`) — the other direction
+
+The offboarding sweep only ever sees rows the **MissionHQ Log already has**, and
+every one of those was put there by the Zoho sync. An account that never made it
+into the Log — a contractor, a shared mailbox, a hire Zoho records under a
+different email — is invisible to it. Suryaprakash P was caught because he had a
+Log row; nobody without one would be.
+
+`auditSlackAccountsNotInZoho()` walks the Slack member list and reports every
+**active full member** whose email the org tree does not contain, onto a
+**`Slack vs Zoho`** tab.
+
+**A report, not a sweep.** "Absent from Zoho" is only safe as an exit signal
+against the Log. Against the raw directory it also flags anyone whose Slack
+email differs from their Zoho one — which is a live problem here, not a
+hypothetical: Anuja Nair, Gayathri Meka and Harshit Shrivastava were all marked
+`Exited — not in Zoho org tree` while employed, under a second address. So each
+row carries a **Possible Zoho Match (by name)**, and nothing is acted on
+automatically.
+
+**Members only.** The workspace carries ~130 Slack Connect guests (gmail.com,
+fairmoney.io, starsquaredpr.com …) who will never be in Zoho and are not
+supposed to be. `SLACK_AUDIT_MEMBERS_ONLY` drops them; bots and deactivated
+accounts go too, all counted in the log.
+
+### The tab is an input as well as an output
+
+Two columns are **written by hand and preserved on every run**:
+
+```text
+Send Attendance Prompt?   yes/no — this person should still get the daily prompt
+Notes                     free text
+```
+
+The merge is keyed on **Email** (`SLACK_AUDIT_KEY_HEADER`) and every column is
+read by **header name**, so inserting a column by hand cannot shift answers into
+a machine column. A full rewrite would throw away the decision the report exists
+to collect — `readSlackAuditSheet_()` → `mergeSlackAuditRows_()` →
+`writeSlackAuditSheet_()` is that merge, do not collapse it back into a rewrite.
+
+Rows that stop being reported are **kept with a Resolved status, never deleted**
+(`now in Zoho` / `Slack deactivated` / `now a guest account` / `not in the Slack
+directory`). Deleting the row would delete the answer, and the same account
+reappearing next month would ask the question again from scratch.
+
+### When it runs, and what it says
+
+It rides the **end of `syncEmployeesFromZohoOrgTree()`** — best-effort, and
+re-using that run's payload. No trigger of its own: the sync already runs daily
+and already holds the org tree, so a separate trigger would mean a second fetch
+for the same answer.
+
+It alerts `#automation-alerts` **only when somebody NEW appears**, as one message
+naming them all (`sendSuccessAlert`, which does not dedupe). The standing list
+lives on the tab; reposting it daily is how an alert becomes one nobody reads.
+
+### Functions
+
+```text
+auditSlackAccountsNotInZoho([options])     // options: { employees, dryRun }
+previewSlackAccountsNotInZoho()            // logs only, writes nothing, alerts nothing
+auditSlackAccountsNotInZohoBestEffort_()   // what the employee sync calls
+```
+
+Menu: **Audit Slack vs Zoho** / **Preview Slack vs Zoho**.
+
 ## Fortnightly Attendance Summaries (`FortnightlySummary.js`)
 
 Posts an attendance summary to five group Slack channels on the **1st and the

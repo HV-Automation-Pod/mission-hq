@@ -183,6 +183,18 @@ function syncEmployeesFromZohoOrgTree() {
     Logger.log(`Offboarding sweep skipped: ${exitError.message}`);
   }
 
+  // Same payload once more: reconcile the Slack member list against it and
+  // report anyone with a live Slack account the org tree has never heard of.
+  // This rides the employee sync rather than carrying its own trigger — the
+  // sync already runs daily and already holds the payload, so a separate
+  // trigger would mean a second org-tree fetch for the same answer.
+  let slackAudit = null;
+  try {
+    slackAudit = auditSlackAccountsNotInZohoBestEffort_({ employees: employees });
+  } catch (auditError) {
+    Logger.log(`Slack vs Zoho audit skipped: ${auditError.message}`);
+  }
+
   // Refresh the PMS Level column off the back of the employee sync, so new hires
   // and level changes are picked up on the same cadence. Best-effort: a PMS
   // access failure must not fail the employee sync itself.
@@ -205,7 +217,8 @@ function syncEmployeesFromZohoOrgTree() {
     skipped: skipped,
     pmsLevelSync: pmsLevelSync,
     pofuSync: pofuSync,
-    exitSweep: exitSweep
+    exitSweep: exitSweep,
+    slackAudit: slackAudit
   };
   } catch (e) {
     sendErrorAlert('Employee sync from Zoho org tree failed: ' + (e && e.message ? e.message : e), { functionName: 'syncEmployeesFromZohoOrgTree' });
