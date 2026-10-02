@@ -3,7 +3,7 @@
 Living runbook. Updated as the migration proceeds — if something here disagrees
 with the code, the code is right and this file is stale; fix it.
 
-**Last updated:** 2026-10-04
+**Last updated:** 2026-10-03
 
 ---
 
@@ -32,7 +32,7 @@ pending today" into an index lookup. The rest follows from that.
 
 ## Where it lives, and why there
 
-**Project: WeCare** (`jsehiivvzalvcrlybmlf`, org Compass, PRO) — *not* Automations.
+**Project: WeCare** (ref in Supabase; org Compass, PRO) — *not* Automations.
 
 Postgres cannot join across projects, and WeCare already maintains, daily and in
 production, the three hardest inputs:
@@ -92,85 +92,73 @@ mission-hq-app-script/ the Apps Script project — being retired, do not add to 
 
 The Supabase side used to live under `mission-hq-app-script/`, which is the
 folder this migration exists to delete. Deploy with
-`supabase functions deploy mission-hq --project-ref jsehiivvzalvcrlybmlf` from
+`supabase functions deploy mission-hq --project-ref '<SUPABASE_PROJECT_REF>'` from
 the repo root.
 
-## Migrations
+## Migrations — all applied
 
-| File | What | Status |
-|---|---|---|
-| `01_mission_hq_schema.sql` | schema, `employees`, mirror trigger, seed | ✅ applied |
-| `02_attendance.sql` | `attendance`, `prompts`, `locations`, `is_business_day()` | ✅ applied |
-| `03_merge_prompts_into_attendance.sql` | folds `prompts` in, drops the table | ✅ applied |
-| `04_fix_location_values.sql` | `value` must be Slack's hyphenated form | ⬜ **run this** |
+| File | What |
+|---|---|
+| `01_mission_hq_schema.sql` | schema, `employees`, mirror trigger from `public.employees`, seed |
+| `02_attendance.sql` | `attendance`, `locations`, `is_business_day()` |
+| `03_merge_prompts_into_attendance.sql` | folds `prompts` in — same key, so it was a column set |
+| `04_fix_location_values.sql` | `value` must be Slack's hyphenated wire format |
+| `05_service_role_grants.sql` | a custom schema inherits none of `public`'s grants |
+| `06_lock_down_anon.sql` | fourth gate: no schema `usage` for anon/authenticated |
+| `07_prompt_content.sql` | `messages` (35), `trivia` (172), `settings` |
+| `08_prompt_views.sql` | `prompt_recipients`, `prompt_gaps` |
+| `09_cron.sql` | `invoke_()` + the schedule |
+| `10_ist_day.sql` | `today_ist()` — one definition of today, the Indian one |
+| `11_reminder.sql` | `reminder_recipients` + its 14:00 job |
 
-`04` matters before any real submit: Slack sends `Split-Day`, not `Split Day`.
-Without it every multi-word answer misses its row.
+## Live on Supabase
 
----
+```
+09:00 IST  mission-hq-prompt   one run, worker pool, drains prompt_recipients
+10:00 IST  mission-hq-verify   silent unless somebody was missed
+14:00 IST  mission-hq-remind   threaded nudge to whoever is still Pending
+any time   mission-hq          Slack submits upsert into mission-hq.attendance
+```
 
-## Done
+Backed by 40,029 rows of history (2025-05-15 → 2026-10-01, verified row-for-row
+against the sheet), 347 promptable people, and a calendar reading
+`public.holidays` rather than a hand-edited array.
 
-- **Schema live** in WeCare, RLS on with no policies (deny-all; the dashboard
-  uses the service role, which bypasses it).
-- **History backfilled and verified** — exact match, nothing lost:
+All four verified live end to end. The Slack submit leg is the one still waiting
+on a real click.
 
-  ```
-  employees 375   attendance 40,029   pending 12,005   answered 28,024
-  2025-05-15 → 2026-10-01
-  ```
+## Still on Apps Script
 
-  375 > Zoho's 351: the extra 24 are leavers with history plus the people whose
-  HR record sits under a second address. All stamped `exited_at` on import, so
-  the history exists and they are not prompted.
-- `BackfillToSupabase.js` — CSV and SQL generators, idempotent, in Apps Script.
-- Slack secrets set on WeCare: signing secret, bot token.
-- Edge function deployed to Automations and the Slack URL pointed at it — **this
-  was a wrong turn**, see Pending.
+| | Note |
+|---|---|
+| Fortnightly summaries | **next due the 16th — the real deadline** |
+| Recovery sweep | much smaller now; its job is the DM cross-check, not walking a sheet |
+| Zoho leave sync (in) | needs `ZOHO_*` secrets on WeCare |
+| Zoho attendance push (out) | deferred by decision, after everything else |
+| POFU roster | deferred by decision; feeds another team's sheet |
+| Managers / FLG rosters | Managers can regenerate from `identity_links`; FLG needs a one-off import |
+| Dashboard | still reads `doGet?action=all`; repoint to Postgres |
+| `WorkCalendar.js` library | **two dependants**: `dinner-poll-automation`, `pofu-automation` |
 
-## In progress
+**PMS levels: dropped, not migrated.** No summary group selects on `PMS Level`
+any more — the Managers group reads the roster mirrored from the Slack channel.
+Dropping it also means Supabase never needs access to the PMS master
+spreadsheet, which holds compensation data.
 
-- **Rewrite `mission-hq` edge function**: on submit, upsert
-  `mission-hq.attendance` instead of forwarding to Apps Script. Also read the
-  picker options from `mission-hq.locations` rather than `?action=locations`.
-- **New `mission-hq-prompt` edge function** + `pg_cron` at 10:09 IST
-  (04:39 UTC): read active employees, join `identity_links` for the Slack id,
-  gate on `is_business_day()`, send the DM, insert the `'Pending'` row with its
-  `message_ts`.
+### WorkCalendar — the exact surface
 
-## Pending
+Verified by searching all 16 repos for the library id. Five functions, two
+dependants:
 
-**Blocking Monday 2026-10-05, 10:09 IST**
+```
+dinner-poll-automation   Slack.js:7       isWeekend() || isHoliday()
+                         MealPoll.js:187  addBusinessDays(new Date(), 1)
+pofu-automation          WorkCalendar.js  one adapter file, all five calls
+```
 
-- [ ] Run `04_fix_location_values.sql`
-- [ ] **Expose `mission-hq` in Settings → API → Exposed schemas** — PostgREST
-      cannot see the schema otherwise, and every edge-function query 404s
-- [ ] Deploy the rewritten function to **WeCare**
-- [ ] Repoint Slack interactivity to
-      `https://jsehiivvzalvcrlybmlf.supabase.co/functions/v1/mission-hq`
-- [ ] Delete the Automations deployment so no stray copy can answer
-- [ ] `MISSION_HQ_SLACK_USER_TOKEN` on WeCare (truncated in the screenshot) —
-      without it the Slack profile-status update throws
-- [ ] Pause the Apps Script triggers — **pause, not delete**, until Monday proves out
-
-**After Monday**
-
-- [ ] Reminder flow + its pre-send DM check
-- [ ] Recovery sweep — much smaller now; its job is the Slack DM cross-check,
-      not walking a sheet
-- [ ] Fortnightly summaries (next due the **16th**) + a materialised summary
-      table so the report doesn't rescan history
-- [ ] Zoho leave sync (read) and attendance push (write) — needs
-      `ZOHO_CLIENT_ID` / `ZOHO_CLIENT_SECRET` / `ZOHO_REFRESH_TOKEN` on WeCare
-- [ ] Dashboard: repoint `/api/data` from Apps Script to Postgres, then the
-      write screens — edit a day, toggle `wfo_exempt`, FLG roster, the
-      Slack-vs-Zoho decision
-- [ ] Decide `WorkCalendar.js`'s fate — it is a **published Apps Script library**
-      and `dinner-poll-automation` and `pofu-automation` depend on it. Retiring
-      the project breaks them.
-- [ ] Decide `PofuSync.js` — writes to another team's spreadsheet; from Supabase
-      that needs a Google service account
-- [ ] Drop PMS level sync? No summary group selects on it any more
+Retiring the Apps Script project breaks both silently. Pause the triggers, keep
+the project alive as a library-only shell, and migrate them to read
+`public.holidays` whenever.
 
 ## Open questions
 
@@ -180,20 +168,24 @@ Without it every multi-word answer misses its row.
 
 ---
 
-## Cutover (Monday)
+## Monday
 
-1. Apply `04`. Expose the schema. Set the user token.
-2. Deploy the function to WeCare; smoke-test it.
-3. Flip the Slack interactivity URL.
-4. Pause the Apps Script triggers.
-5. Watch the 10:09 cron. Check `select count(*) from "mission-hq".attendance where day = current_date`.
+Leave the Apps Script triggers running for one day. Both systems send — one
+extra DM, one morning — and at 10:30 compare:
+
+```sql
+select count(*) from "mission-hq".attendance where day = "mission-hq".today_ist();
+```
+
+against the sheet's column for the same day. Equal counts is what lets the old
+one be switched off without hoping.
 
 ## Rollback
 
 Two minutes, at any point before the triggers are deleted:
 
 1. Point Slack interactivity back at
-   `https://riiisqzwbhlytogcjdmn.supabase.co/functions/v1/mission-hq` (still
+   `https://<SLACK_BOT_PROJECT_REF>.supabase.co/functions/v1/mission-hq` (still
    deployed, still holds its secrets).
 2. Unpause the Apps Script triggers.
 
