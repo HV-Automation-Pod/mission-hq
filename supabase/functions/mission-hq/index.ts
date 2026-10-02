@@ -35,6 +35,43 @@ function getRequiredEnv(name: string) {
   return value;
 }
 
+// ---------------------------------------------------------------------------
+// Postgres, over PostgREST.
+//
+// SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are injected into every edge
+// function by the platform, so there is nothing to configure. The service role
+// bypasses RLS, which is why `mission-hq` can stay deny-all for everyone else.
+//
+// `Accept-Profile` / `Content-Profile` are what select a non-`public` schema.
+// They are NOT optional, and the schema must also be listed under
+// Settings -> API -> Exposed schemas — without that every call 404s with a
+// message that does not mention schemas at all.
+// ---------------------------------------------------------------------------
+const PG_SCHEMA = "mission-hq";
+
+async function pg(path: string, init: RequestInit & { profile?: string } = {}) {
+  const base = getRequiredEnv("SUPABASE_URL");
+  const key = getRequiredEnv("SUPABASE_SERVICE_ROLE_KEY");
+  const write = (init.method || "GET") !== "GET";
+
+  const response = await fetch(`${base}/rest/v1/${path}`, {
+    ...init,
+    headers: {
+      apikey: key,
+      authorization: `Bearer ${key}`,
+      "content-type": "application/json",
+      [write ? "content-profile" : "accept-profile"]: init.profile || PG_SCHEMA,
+      ...(init.headers || {}),
+    },
+  });
+
+  const body = await response.text();
+  if (!response.ok) {
+    throw new Error(`postgrest ${init.method || "GET"} ${path} -> ${response.status} ${body.slice(0, 300)}`);
+  }
+  return body ? JSON.parse(body) : null;
+}
+
 function timingSafeEqualHex(a: string, b: string) {
   if (a.length !== b.length) return false;
   let result = 0;
@@ -238,32 +275,45 @@ type PickerOption = { text: { type: string; text: string }; value: string };
 // Cached per isolate: an Apps Script GET costs a second or two, and the list
 // changes a few times a year at most. A cold isolate just pays it once.
 let cachedOptions: PickerOption[] | null = null;
+let cachedStatusByValue: Map<string, string> | null = null;
 let cachedOptionsAt = 0;
 const OPTIONS_TTL_MS = 30 * 60 * 1000;
 
-async function fetchLocationOptions(): Promise<PickerOption[]> {
-  if (cachedOptions && Date.now() - cachedOptionsAt < OPTIONS_TTL_MS) return cachedOptions;
-
-  const url = getRequiredEnv("MISSION_HQ_APPS_SCRIPT_URL");
-  const response = await fetch(`${url}?action=locations`);
-  const json = await response.json();
-  if (!json?.success || !Array.isArray(json.locations)) {
-    throw new Error(`locations fetch returned no list: ${JSON.stringify(json).slice(0, 200)}`);
+/**
+ * The picker options, and the value -> stored-status map, from
+ * `mission-hq.locations`.
+ *
+ * This used to call the Apps Script web app at `?action=locations`, which put an
+ * Apps Script cold start on a path a human was waiting on. It is now one indexed
+ * read, and the table is the only place the list is defined.
+ *
+ * `value` is stored EXACTLY as Slack sends it — hyphenated — so nothing here
+ * does string surgery on a payload. The single option whose stored form is not
+ * just its value de-hyphenated is `Office-Client` -> `Office + Client`, and that
+ * lives in the `status` column rather than in an `if`.
+ */
+async function loadLocations(): Promise<{ options: PickerOption[]; statusByValue: Map<string, string> }> {
+  if (cachedOptions && cachedStatusByValue && Date.now() - cachedOptionsAt < OPTIONS_TTL_MS) {
+    return { options: cachedOptions, statusByValue: cachedStatusByValue };
   }
 
-  const options: PickerOption[] = json.locations
-    .filter((item: { location?: string; value?: string }) => item.location && item.value)
-    .map((item: { location: string; value: string }) => ({
-      text: { type: "plain_text", text: item.location },
-      // Same transform the Apps Script prompt applies, so a value picked here is
-      // indistinguishable from one picked on the original prompt.
-      value: item.value.replace(/\s+/g, "-"),
-    }));
-  if (options.length === 0) throw new Error("locations fetch returned an empty list");
+  const rows = await pg("locations?select=value,label,status&active=is.true&order=sort_order") as
+    Array<{ value: string; label: string; status: string }>;
+  if (!Array.isArray(rows) || rows.length === 0) {
+    throw new Error("mission-hq.locations is empty — the picker has nothing to offer");
+  }
 
-  cachedOptions = options;
+  cachedOptions = rows.map((row) => ({
+    text: { type: "plain_text", text: row.label },
+    value: row.value,
+  }));
+  cachedStatusByValue = new Map(rows.map((row) => [row.value, row.status]));
   cachedOptionsAt = Date.now();
-  return options;
+  return { options: cachedOptions, statusByValue: cachedStatusByValue };
+}
+
+async function fetchLocationOptions(): Promise<PickerOption[]> {
+  return (await loadLocations()).options;
 }
 
 /**
@@ -556,6 +606,79 @@ async function alertLostResponse(record: { email: string; date: string; status: 
  * Apps Script answers HTTP 200 even when the sheet write failed, so the JSON
  * body is inspected too — `response.ok` alone is not evidence of success.
  */
+/**
+ * Records the answer in `mission-hq.attendance`.
+ *
+ * This replaces an HTTP forward to an Apps Script web app, which is exactly
+ * where answers used to go missing: the confirmation DM is updated BEFORE the
+ * write is attempted, so a failed forward left somebody looking at "Thank you
+ * for your update!" over a cell that still said Pending. Every one of those had
+ * to be rescued later by re-reading their Slack DM.
+ *
+ * An upsert on (email, day) is the whole write. Re-submitting overwrites, which
+ * is what the Edit button needs, and two submits in the same second contend on
+ * one row under a row lock instead of racing a read-modify-write.
+ *
+ * It still retries and still alerts, because the thing that makes a lost write
+ * expensive has not changed: the person has already been told we have it.
+ */
+async function recordAttendance(record: {
+  email: string;
+  date: string;
+  status: string;
+  channel?: string;
+  messageTs?: string;
+}) {
+  const { statusByValue } = await loadLocations();
+
+  // Fall back to the raw value rather than dropping the answer: an option added
+  // to the picker but not yet to the table should land as something a human can
+  // see and correct, not vanish.
+  const stored = statusByValue.get(record.status);
+  if (!stored) {
+    console.error(`MissionHQ: no locations row for value "${record.status}" — storing it as sent`);
+  }
+
+  const attempts = 3;
+  let lastReason = "";
+
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      await pg("attendance?on_conflict=email,day", {
+        method: "POST",
+        headers: { prefer: "resolution=merge-duplicates,return=minimal" },
+        body: JSON.stringify([{
+          email: record.email.trim().toLowerCase(),
+          day: record.date,
+          status: stored || record.status,
+          source: "slack",
+          answered_at: new Date().toISOString(),
+          slack_channel: record.channel || null,
+          message_ts: record.messageTs || null,
+          updated_at: new Date().toISOString(),
+        }]),
+      });
+      return;
+    } catch (error) {
+      lastReason = error instanceof Error ? error.message : String(error);
+
+      // A foreign key violation is not transient and retrying cannot fix it:
+      // the person has no row in mission-hq.employees. Fail fast and say why,
+      // because the repair is a human adding them, not another attempt.
+      if (lastReason.includes("23503") || lastReason.includes("foreign key")) {
+        lastReason = `${record.email} has no mission-hq.employees row — add them, or set prompt_opt_in`;
+        break;
+      }
+    }
+
+    console.error(`MissionHQ attendance write ${attempt}/${attempts} failed: ${lastReason}`);
+    if (attempt < attempts) await new Promise((resolve) => setTimeout(resolve, attempt * 1500));
+  }
+
+  await alertLostResponse(record, lastReason);
+  throw new Error(`attendance write failed: ${lastReason}`);
+}
+
 async function forwardToAppsScript(record: { email: string; date: string; status: string; department?: string; location?: string }) {
   const appsScriptUrl = getRequiredEnv("MISSION_HQ_APPS_SCRIPT_URL");
   const headers: Record<string, string> = { "content-type": "application/json" };
@@ -669,12 +792,14 @@ async function processSlackInteraction(payload: SlackPayload) {
     console.error("MissionHQ: could not resolve email for user", userId);
     return;
   }
-  await forwardToAppsScript({
+  await recordAttendance({
     email,
     date,
     status: option.value,
-    department: meta.department,
-    location: meta.location,
+    channel: payload.channel?.id,
+    // Kept alongside the answer so the DM can be reopened and edited weeks
+    // later without a second table to join.
+    messageTs: payload.message?.ts,
   });
 }
 

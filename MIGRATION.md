@@ -82,6 +82,19 @@ the migration headers:
 
 ---
 
+## Repo layout
+
+```
+supabase/              migrations + edge functions   <- deploy from the repo root
+mission-hq/            Next.js dashboard, reads Postgres
+mission-hq-app-script/ the Apps Script project — being retired, do not add to it
+```
+
+The Supabase side used to live under `mission-hq-app-script/`, which is the
+folder this migration exists to delete. Deploy with
+`supabase functions deploy mission-hq --project-ref jsehiivvzalvcrlybmlf` from
+the repo root.
+
 ## Migrations
 
 | File | What | Status |
