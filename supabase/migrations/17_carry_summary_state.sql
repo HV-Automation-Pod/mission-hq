@@ -1,0 +1,37 @@
+-- ===========================================================================
+-- APPLIED BY HAND. The data is deliberately not in this file.
+--
+-- This migration carried the last published per-person scores and snapshot
+-- numbers out of the Apps Script properties and into `summary_groups`, so the
+-- first Postgres report shows movement rather than a blank column and reads
+-- "our sixth attendance snapshot" instead of restarting the series.
+--
+-- WHY IT IS NOT HERE. The payload was roughly 400 named individuals with their
+-- attendance percentage. That is performance data about identifiable people,
+-- and a git repo is the wrong place for it, whatever the repo's visibility.
+--
+-- What it did, so it can be redone if the database is ever rebuilt:
+--
+--   for each of the six groups, a jsonb object of {published name: percentage}
+--   from the SUMMARY_SCORES_<group> script property, joined to
+--   mission-hq.employees on a normalised full_name to produce {email: percentage}
+--
+--   update "mission-hq".summary_groups
+--      set last_scores = <that object, keyed by email>,
+--          last_period = '2026-09-16..2026-09-30',
+--          snapshot_no = 5
+--    where key = <group>;
+--
+-- The source values live in the Apps Script project's properties
+-- (SUMMARY_SCORES_*, SUMMARY_SNAPSHOT_*) until it is retired.
+--
+-- Keyed by EMAIL, not name, which is the point of having done it: a renamed
+-- person keeps their movement column from here on. Matching the old names back
+-- was best-effort, so some people show no delta on the first report and have
+-- one from the second.
+--
+-- Applied 2026-10-03. Carried: bengaluru 212, managers 47, gna 39, mumbai 17,
+-- coimbatore 16, flg 16.
+-- ===========================================================================
+
+-- Intentionally empty.

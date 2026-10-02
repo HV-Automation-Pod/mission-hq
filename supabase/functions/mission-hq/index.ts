@@ -581,7 +581,7 @@ async function alertLostResponse(record: { email: string; date: string; status: 
         unfurl_links: false,
         text:
           `:rotating_light: *MissionHQ Alert*\n\n` +
-          `*Error:* \`Attendance response LOST — the user was told it was saved: ${reason}\`\n` +
+          `*Error:* \`Attendance response LOST, and the user was told it was saved: ${reason}\`\n` +
           `*Function:* \`mission-hq edge function / forwardToAppsScript\`\n` +
           `*Details:* \`${record.email}\` on \`${record.date}\` (response \`${record.status}\`). ` +
           `The sheet still shows \`Pending\`. The recovery sweep recovers it from the Slack DM.`,
@@ -666,7 +666,7 @@ async function recordAttendance(record: {
       // the person has no row in mission-hq.employees. Fail fast and say why,
       // because the repair is a human adding them, not another attempt.
       if (lastReason.includes("23503") || lastReason.includes("foreign key")) {
-        lastReason = `${record.email} has no mission-hq.employees row — add them, or set prompt_opt_in`;
+        lastReason = `${record.email} has no mission-hq.employees row. Add them, or set prompt_opt_in.`;
         break;
       }
     }
@@ -768,21 +768,9 @@ async function processSlackInteraction(payload: SlackPayload) {
 
   const date = parseSubmitDate(actionValue);
 
-  // 1) Update the Slack confirmation message.
-  await updateSlackMessage(payload, date, option, actionValue);
-
-  // 2) Set the Slack profile status (also today-only, checked inside; isolated
-  //    so it never blocks the sheet write).
-  try {
-    await updateSlackProfileStatus(payload, option, date);
-  } catch (statusError) {
-    console.error("MissionHQ profile status update failed", statusError);
-  }
-
-  // 3) Prefer the email embedded in the button value (new messages); fall back
-  //    to the users.info API for older messages that predate it. Then hand Apps
-  //    Script a clean record to write to the sheet. Department/location are
-  //    forwarded for later use; the sheet-writer ignores them for now.
+  // 1) Resolve who this is, BEFORE anything is shown or written. Prefer the
+  //    email embedded in the button value; fall back to users.info for messages
+  //    that predate it.
   const userId = payload.user?.id;
   let email = meta.email;
   if (!email) {
@@ -792,15 +780,39 @@ async function processSlackInteraction(payload: SlackPayload) {
     console.error("MissionHQ: could not resolve email for user", userId);
     return;
   }
+
+  // 2) RECORD IT FIRST, AND ONLY THEN SAY SO.
+  //
+  //    The old order confirmed before writing, which is how somebody could be
+  //    told "we received your response" over a row that still said Pending —
+  //    and then be nudged about it at 14:00. Writing first makes that state
+  //    unrepresentable rather than merely unlikely: if this throws, no
+  //    confirmation is shown, the Submit button stays where it was, and the
+  //    obvious thing to do (press it again) is also the right one.
+  //
+  //    The inverse failure — written, but the confirmation did not render — is
+  //    strictly better: the answer is safe, and a re-submit is an upsert onto
+  //    the same row.
   await recordAttendance({
     email,
     date,
     status: option.value,
     channel: payload.channel?.id,
     // Kept alongside the answer so the DM can be reopened and edited weeks
-    // later without a second table to join.
+    // later, and so the 14:00 reminder has a thread to reply into.
     messageTs: payload.message?.ts,
   });
+
+  // 3) Now the confirmation is a statement of fact rather than a promise.
+  await updateSlackMessage(payload, date, option, actionValue);
+
+  // 4) Slack profile status: today-only, checked inside. Isolated because it is
+  //    cosmetic — it must never be the reason an answer is not recorded.
+  try {
+    await updateSlackProfileStatus(payload, option, date);
+  } catch (statusError) {
+    console.error("MissionHQ profile status update failed", statusError);
+  }
 }
 
 Deno.serve(async (req) => {

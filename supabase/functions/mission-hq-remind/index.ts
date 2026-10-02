@@ -68,7 +68,7 @@ Deno.serve(async () => {
           const posted = await slack("chat.postMessage", token, {
             channel: person.slack_channel,
             thread_ts: person.message_ts,
-            text: `${name}, a quick nudge — your check-in for ${day} is still open. ` +
+            text: `${name}, a quick nudge: your check-in for ${day} is still open. ` +
                   `Pick an option above and hit Submit whenever you get a moment.`,
           });
           if (!posted.ok) throw new Error(posted.error || "chat.postMessage failed");

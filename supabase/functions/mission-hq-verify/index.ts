@@ -42,7 +42,7 @@ Deno.serve(async () => {
     const shouldHaveWorked = gaps.filter((g) => g.slack_user_id);
 
     const lines = (rows: Gap[]) =>
-      rows.map((g) => `• ${g.full_name || g.email} — ${g.email}`).join("\n");
+      rows.map((g) => `• ${g.full_name || g.email} (${g.email})`).join("\n");
 
     const detail = [
       `*${gaps.length}* person/people have no attendance row for *${day}*.`,
