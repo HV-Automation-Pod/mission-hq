@@ -23,7 +23,7 @@ back to the storage:
 | `rollingMissedResponseSweep` timing out at row 283/375 | every job read a 376 × 346 grid; Apps Script caps an execution at 6 min |
 | `WRITTEN_TO_DUPLICATE_COLUMN` | two columns for one date were *expressible* |
 | answers lost after "Thank you for your update!" | write path was Slack → edge → **HTTP** → Apps Script → cell |
-| Anuja / Gayathri / Harshit marked as leavers while employed | identity was an email string, matched one way, with no fallback |
+| employees marked as leavers while still employed | identity was an email string, matched one way, with no fallback |
 
 `primary key (email, day)` makes the duplicate unrepresentable and turns "who is
 pending today" into an index lookup. The rest follows from that.

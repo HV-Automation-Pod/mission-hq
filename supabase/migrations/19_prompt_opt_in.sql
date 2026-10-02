@@ -1,0 +1,32 @@
+-- ===========================================================================
+-- APPLIED BY HAND. The three email addresses are deliberately not in this file.
+--
+-- The Slack vs Zoho tab is where somebody answers "this person is employed and
+-- should be checked in, whatever Zoho says". Three people were marked Yes there
+-- and none of it had reached Postgres: all were stamped `exited_at` because the
+-- Zoho feed does not list them, and `prompt_opt_in` was false for everybody.
+--
+-- What it did:
+--
+--   insert a mission-hq.employees row for the one person who had none, because
+--   the backfill only carried people who were in the MissionHQ Log, and an
+--   answer that silently does nothing is worse than no answer
+--
+--   set prompt_opt_in = true and wfo_exempt = null for the three
+--
+-- `prompt_opt_in` outranks `exited_at` in `prompt_recipients` — that is the
+-- whole point of the column, the human override for the case the automatic
+-- signal gets wrong, a live employee whose HR record sits under a different
+-- email. It does NOT override `wfo_exempt`, so the stale "Exited" reason had to
+-- be cleared too or they would have stayed silenced.
+--
+-- A fourth person on that tab was marked No and was deliberately left alone.
+--
+-- From here on this is a UI action, not a migration: read
+-- `mission-hq.slack_not_in_zoho` (migration 20) and write `prompt_opt_in` and
+-- `notes` on `mission-hq.employees`.
+--
+-- Applied 2026-10-03.
+-- ===========================================================================
+
+-- Intentionally empty.

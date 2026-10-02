@@ -278,3 +278,128 @@ function writeBackfillFile_(folder, name, content) {
   while (existing.hasNext()) existing.next().setTrashed(true);
   return folder.createFile(name, content, MimeType.PLAIN_TEXT);
 }
+
+// ---------------------------------------------------------------------------
+// ONE-OFF: the three things only the spreadsheet knows.
+//
+// Run generateSummarySeedSql() and run the file it writes. It covers what the
+// Zoho feed cannot tell Postgres:
+//
+//   1. SITE CORRECTIONS. Zoho has no Coimbatore — those 22 people are filed as
+//      Bengaluru. The Log's Location column carries the correction because the
+//      employee sync only ever wrote it when blank, so a hand-fixed value
+//      survived every run. That made this column quietly more accurate than its
+//      source, and nothing recorded that it was.
+//
+//   2. THE FLG ROSTER. FLG is not a Zoho department — its people sit across
+//      several — so no column can name them. The list is somebody's, kept by
+//      hand on the FLG tab.
+//
+//   3. THE MANAGERS ROSTER. Mirrored from the managers Slack channel. Seeded
+//      here so the first report is not short; afterwards it rebuilds itself
+//      from Slack.
+//
+// The site SQL only writes an override where the sheet DISAGREES with Zoho, so
+// it touches ~22 rows rather than ~375 and leaves the rest tracking the feed.
+// ---------------------------------------------------------------------------
+
+function generateSummarySeedSql() {
+  const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = spreadsheet.getSheetByName(CANDIDATE_SHEET_NAME);
+  if (!sheet) throw new Error(`Sheet ${CANDIDATE_SHEET_NAME} not found`);
+
+  const data = sheet.getDataRange().getDisplayValues();
+  const headers = data[0].map(h => h.toString().trim());
+  const emailCol = headers.indexOf("Email Address");
+  const locCol = headers.indexOf("Location");
+  if (emailCol === -1 || locCol === -1) throw new Error("Email Address / Location columns not found");
+
+  const sites = [];
+  const seen = {};
+  for (let r = 1; r < data.length; r++) {
+    const email = (data[r][emailCol] || "").toString().trim().toLowerCase();
+    const loc = (data[r][locCol] || "").toString().trim();
+    if (!email || !loc || seen[email]) continue;
+    seen[email] = true;
+    sites.push(`  (${sqlText_(email)}, ${sqlText_(loc)})`);
+  }
+
+  const flg = readSeedRoster_(spreadsheet, "FLG");
+  const managers = readSeedRoster_(spreadsheet, "Managers");
+
+  let sql =
+    "-- Generated from the MissionHQ Log. Safe to re-run.\n\n" +
+    "-- 1. Site corrections. Only written where the sheet disagrees with Zoho,\n" +
+    "--    so the ~350 rows whose feed value is already right stay tracking it.\n" +
+    "update \"mission-hq\".employees e\n" +
+    "   set location_override = v.loc, updated_at = now()\n" +
+    "  from (values\n" + sites.join(",\n") + "\n" +
+    "       ) as v(email, loc)\n" +
+    " where e.email = v.email\n" +
+    "   and \"mission-hq\".norm_(v.loc) is distinct from \"mission-hq\".norm_(e.location);\n\n";
+
+  sql += seedRosterSql_("flg", flg);
+  sql += seedRosterSql_("managers", managers);
+
+  sql +=
+    "-- What it did. The site count should be about the size of the Coimbatore\n" +
+    "-- group plus any other hand correction; a much larger number means the\n" +
+    "-- sheet and the feed disagree far more widely than anyone thought.\n" +
+    "select\n" +
+    "  (select count(*) from \"mission-hq\".employees where location_override is not null) as site_overrides,\n" +
+    "  (select count(*) from \"mission-hq\".rosters where group_key = 'flg')               as flg_roster,\n" +
+    "  (select count(*) from \"mission-hq\".rosters where group_key = 'managers')          as managers_roster,\n" +
+    "  (select count(*) from \"mission-hq\".group_members where group_key = 'coimbatore')  as coimbatore_members;\n";
+
+  const folder = getOrCreateBackfillFolder_();
+  const file = writeBackfillFile_(folder, "04-summary-seed.sql", sql);
+
+  Logger.log("=".repeat(78));
+  Logger.log(`Site values read       : ${sites.length}`);
+  Logger.log(`FLG roster emails      : ${flg.length}`);
+  Logger.log(`Managers roster emails : ${managers.length}`);
+  Logger.log(`  ${file.getName()}  ${file.getUrl()}`);
+  Logger.log("=".repeat(78));
+  return { sites: sites.length, flg: flg.length, managers: managers.length, url: file.getUrl() };
+}
+
+/** Email column of a roster tab, by header name rather than position. */
+function readSeedRoster_(spreadsheet, tabName) {
+  const sheet = spreadsheet.getSheetByName(tabName);
+  if (!sheet) { Logger.log(`No "${tabName}" tab — skipping that roster.`); return []; }
+  const values = sheet.getDataRange().getDisplayValues();
+  if (values.length < 2) return [];
+
+  const headers = values[0].map(h => h.toString().trim());
+  let col = -1;
+  ["Email Address", "Email ID", "Email"].forEach(candidate => {
+    if (col === -1) col = headers.indexOf(candidate);
+  });
+  if (col === -1) { Logger.log(`"${tabName}" has no email column — skipping.`); return []; }
+
+  const seen = {};
+  const emails = [];
+  for (let r = 1; r < values.length; r++) {
+    const email = (values[r][col] || "").toString().trim().toLowerCase();
+    if (!email || seen[email]) continue;
+    seen[email] = true;
+    emails.push(email);
+  }
+  return emails;
+}
+
+/**
+ * A roster is REPLACED, not merged: these tabs are the whole list, so a row
+ * deleted there has to disappear here too. Wrapped per group so an empty tab
+ * cannot silently wipe a roster that is fine.
+ */
+function seedRosterSql_(groupKey, emails) {
+  if (!emails.length) {
+    return `-- No rows found for the ${groupKey} roster; leaving it untouched.\n\n`;
+  }
+  return `-- ${groupKey} roster: ${emails.length} email(s), replacing whatever is there.\n` +
+    `delete from "mission-hq".rosters where group_key = '${groupKey}';\n` +
+    `insert into "mission-hq".rosters (group_key, email, source) values\n` +
+    emails.map(e => `  ('${groupKey}', ${sqlText_(e)}, 'sheet')`).join(",\n") +
+    "\non conflict (group_key, email) do nothing;\n\n";
+}
