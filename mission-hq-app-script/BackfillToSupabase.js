@@ -32,13 +32,45 @@
 // day they were never asked about.
 // ---------------------------------------------------------------------------
 
-// Tuples per file. ~20k keeps each file near 1 MB, which the SQL editor handles
-// without the browser struggling. Lower it if your editor chokes.
-const BACKFILL_CHUNK_ROWS = 20000;
+// The SQL editor rejects a statement past roughly a megabyte ("Query is too
+// large to be run via the SQL Editor") — a dashboard limit, not a Postgres one.
+// 2000 tuples lands near 100 KB and goes through comfortably.
+const BACKFILL_SQL_CHUNK_ROWS = 2000;
+
+// CSV has no such ceiling; the chunk here only keeps the browser's importer
+// responsive on a file it has to parse client-side.
+const BACKFILL_CSV_CHUNK_ROWS = 50000;
 
 const BACKFILL_FOLDER_NAME = "MissionHQ Supabase backfill";
 
+/**
+ * CSV for the attendance rows — the one to use. Table editor -> attendance ->
+ * Import data from CSV, one drag and drop per file.
+ *
+ * Employees stays SQL whichever mode you pick: it is ~376 rows, nowhere near
+ * the editor's limit, and it needs an ON CONFLICT clause that a CSV import
+ * cannot express.
+ *
+ * NOTE the importer does plain inserts, so it is NOT re-runnable: a second
+ * import of the same file fails on the primary key. Import once; if you need to
+ * start over, `truncate "mission-hq".attendance;` first, or use the SQL mode,
+ * which is idempotent.
+ */
+function generateSupabaseBackfillCsv() {
+  return buildSupabaseBackfill_("csv");
+}
+
+/**
+ * The same data as SQL, in small chunks. Slower to paste, but idempotent — an
+ * existing row for the same person and day is left alone — so it is the mode to
+ * use if a run has to be resumed or repeated.
+ */
 function generateSupabaseBackfillSql() {
+  return buildSupabaseBackfill_("sql");
+}
+
+function buildSupabaseBackfill_(mode) {
+  const csv = mode === "csv";
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CANDIDATE_SHEET_NAME);
   if (!sheet) throw new Error(`Sheet ${CANDIDATE_SHEET_NAME} not found`);
 
@@ -121,12 +153,10 @@ function generateSupabaseBackfillSql() {
       if (!value) { blanks++; return; }
       if (value === "Pending") pending++; else answered++;
 
-      attendanceRows.push("(" + [
-        sqlText_(email),
-        sqlText_(day),
-        sqlText_(value),
-        "'backfill'"
-      ].join(",") + ")");
+      // Kept as values, not as pre-rendered SQL: the same rows have to come out
+      // as either a tuple or a CSV line, and formatting once at emit time is
+      // what stops the two drifting apart.
+      attendanceRows.push({ email: email, day: day, status: value });
     });
   }
 
@@ -152,17 +182,29 @@ function generateSupabaseBackfillSql() {
     "  wfo_exempt = coalesce(nullif(excluded.wfo_exempt, ''), e.wfo_exempt),\n" +
     "  updated_at = now();\n"));
 
-  const chunks = Math.ceil(attendanceRows.length / BACKFILL_CHUNK_ROWS) || 1;
+  const chunkSize = csv ? BACKFILL_CSV_CHUNK_ROWS : BACKFILL_SQL_CHUNK_ROWS;
+  const chunks = Math.ceil(attendanceRows.length / chunkSize) || 1;
   for (let c = 0; c < chunks; c++) {
-    const slice = attendanceRows.slice(c * BACKFILL_CHUNK_ROWS, (c + 1) * BACKFILL_CHUNK_ROWS);
+    const slice = attendanceRows.slice(c * chunkSize, (c + 1) * chunkSize);
     if (!slice.length) break;
-    const name = `02-attendance-${String(c + 1).padStart(2, "0")}.sql`;
-    files.push(writeBackfillFile_(folder, name,
-      `-- MissionHQ backfill: attendance part ${c + 1} of ${chunks} (${slice.length} rows).\n` +
-      "-- Safe to re-run: an existing row for the same person and day is kept.\n\n" +
-      "insert into \"mission-hq\".attendance (email, day, status, source)\nvalues\n" +
-      slice.join(",\n") + "\n" +
-      "on conflict (email, day) do nothing;\n"));
+    const part = String(c + 1).padStart(2, "0");
+
+    if (csv) {
+      // Header row names the columns so the importer maps them itself. The
+      // table's defaults fill created_at / updated_at.
+      files.push(writeBackfillFile_(folder, `02-attendance-${part}.csv`,
+        "email,day,status,source\n" +
+        slice.map(r => [r.email, r.day, r.status, "backfill"].map(csvField_).join(",")).join("\n") + "\n"));
+    } else {
+      files.push(writeBackfillFile_(folder, `02-attendance-${part}.sql`,
+        `-- MissionHQ backfill: attendance part ${c + 1} of ${chunks} (${slice.length} rows).\n` +
+        "-- Safe to re-run: an existing row for the same person and day is kept.\n\n" +
+        "insert into \"mission-hq\".attendance (email, day, status, source)\nvalues\n" +
+        slice.map(r =>
+          "(" + [sqlText_(r.email), sqlText_(r.day), sqlText_(r.status), "'backfill'"].join(",") + ")"
+        ).join(",\n") + "\n" +
+        "on conflict (email, day) do nothing;\n"));
+    }
   }
 
   // A count the import can be checked against, rather than trusting it ran.
@@ -177,7 +219,7 @@ function generateSupabaseBackfillSql() {
     `  (select max(day) from "mission-hq".attendance)                            as last_day;\n`));
 
   Logger.log("=".repeat(78));
-  Logger.log("MissionHQ -> Supabase backfill SQL");
+  Logger.log(`MissionHQ -> Supabase backfill (${csv ? "CSV" : "SQL"})`);
   Logger.log("=".repeat(78));
   Logger.log(`Sheet rows read            : ${data.length - 1}`);
   Logger.log(`People emitted             : ${employeeRows.length}`);
@@ -192,7 +234,9 @@ function generateSupabaseBackfillSql() {
   Logger.log(`   of which answered       : ${answered}`);
   Logger.log(`Blank cells (NOT emitted)  : ${blanks}`);
   Logger.log("=".repeat(78));
-  Logger.log("Run these in order:");
+  Logger.log(csv
+    ? "Run 01 in the SQL editor, drag each .csv into Table editor -> attendance -> Import data from CSV, then run 03:"
+    : "Run these in the SQL editor, in order:");
   files.forEach(f => Logger.log(`  ${f.getName()}  ${f.getUrl()}`));
   Logger.log("=".repeat(78));
 
@@ -212,6 +256,15 @@ function sqlText_(value) {
   const text = (value === null || value === undefined ? "" : value.toString()).trim();
   if (!text) return "null";
   return "'" + text.replace(/'/g, "''") + "'";
+}
+
+/**
+ * One CSV field. Everything is quoted rather than only the fields that need it:
+ * a status like "Office + Client" is harmless today, but a comma added to the
+ * Locations tab later would silently shift every column to its right.
+ */
+function csvField_(value) {
+  return '"' + (value === null || value === undefined ? "" : value.toString()).replace(/"/g, '""') + '"';
 }
 
 function getOrCreateBackfillFolder_() {
