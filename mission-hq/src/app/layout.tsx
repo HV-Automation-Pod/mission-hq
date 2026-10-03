@@ -18,7 +18,7 @@ const jetbrainsMono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "MissionHQ — Office Intelligence",
+  title: "MissionHQ Office Intelligence",
   description: "Real-time office attendance tracking & compliance analytics",
 };
 

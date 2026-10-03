@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { requireDb } from "./db";
+import { headers } from "next/headers";
 import { getViewer } from "./session";
 
 /**
@@ -122,12 +123,69 @@ export async function grantAdmin(email: string, canEdit: boolean, note?: string)
   if (!clean.endsWith("@hyperverge.co")) {
     throw new Error("Only HyperVerge accounts can be given admin access");
   }
+
+  // Was this person already an admin? A level change is not news worth a DM;
+  // being handed access for the first time is.
+  const { data: existing } = await requireDb()
+    .from("dashboard_access").select("email").eq("email", clean).maybeSingle();
+
   const { error } = await requireDb().from("dashboard_access").upsert(
     { email: clean, can_edit: canEdit, note: note?.trim() || null, added_by: viewer.email },
     { onConflict: "email" },
   );
   if (error) throw new Error(error.message);
   revalidatePath("/admin/access");
+
+  // Tell them. Deliberately AFTER the write and deliberately unable to throw:
+  // the grant is the real thing and a Slack outage must not undo it, or leave
+  // the caller believing it failed. The reason comes back so the screen can
+  // say "granted, but we could not reach them on Slack".
+  if (existing) return { granted: true, notified: false, reason: "already had access" };
+  return { granted: true, ...(await notifyAccessGranted(clean, canEdit, note)) };
+}
+
+/**
+ * DM somebody that they have been given access.
+ *
+ * The dashboard URL comes from the request this action is serving, so the link
+ * always points at wherever this is actually deployed rather than at a value
+ * somebody has to remember to update.
+ */
+async function notifyAccessGranted(email: string, canEdit: boolean, note?: string) {
+  const viewer = await getViewer();
+  const base = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!base || !key) return { notified: false, reason: "Supabase is not configured" };
+
+  let dashboardUrl: string | undefined;
+  try {
+    const head = await headers();
+    const host = head.get("x-forwarded-host") || head.get("host");
+    const proto = head.get("x-forwarded-proto") || (host?.startsWith("localhost") ? "http" : "https");
+    if (host) dashboardUrl = `${proto}://${host}`;
+  } catch {
+    // No request context. The DM simply goes without a button.
+  }
+
+  try {
+    const response = await fetch(`${base}/functions/v1/mission-hq-access`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
+      body: JSON.stringify({
+        email,
+        can_edit: canEdit,
+        granted_by: viewer?.email,
+        note: note?.trim() || undefined,
+        dashboard_url: dashboardUrl,
+      }),
+    });
+    const result = await response.json().catch(() => ({}));
+    return result?.ok
+      ? { notified: true as const }
+      : { notified: false as const, reason: String(result?.reason || `HTTP ${response.status}`) };
+  } catch (err) {
+    return { notified: false as const, reason: err instanceof Error ? err.message : "could not reach Slack" };
+  }
 }
 
 /**

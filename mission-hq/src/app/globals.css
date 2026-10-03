@@ -9,38 +9,63 @@
 
 /* ===== Design Tokens ===== */
 :root {
-  /* Surfaces */
-  --bg-app: #f4f6f9;
+  /*
+   * LIGHT PALETTE. Every value below was picked against a measured contrast
+   * ratio, not by eye, because the previous one failed in a way that is hard
+   * to see when you already know what the text says.
+   *
+   * The headline number: `--text-muted` was #94a3b8, which is 2.56:1 on white
+   * — well under the 4.5:1 floor for body text. That token carries nearly
+   * every small label in the app: emails under names, hints under statistics,
+   * the "11px" captions. The whole secondary layer of the interface was
+   * roughly half as legible as it needed to be, and the page read as washed
+   * out rather than as low contrast, which is why it looked like a style
+   * problem instead of a legibility one.
+   *
+   * The borders were the other half. `--border-subtle` at 1.10:1 on white is
+   * not a hairline, it is nothing: table rows had no separators and cards had
+   * no edges. Combined with 0.03-alpha shadows and a page background 1.08:1
+   * from the card surface, there was no elevation anywhere and everything sat
+   * in one flat wash.
+   */
+
+  /* Surfaces. The app background is deeper so white cards actually lift off
+     it: 1.19:1 rather than the old 1.08:1. */
+  --bg-app: #e7ecf3;
   --bg-surface: #ffffff;
-  --bg-surface-secondary: #f8fafc;
-  --bg-surface-hover: #f1f5f9;
-  --bg-inset: #eef2f7;
+  --bg-surface-secondary: #f6f8fc;
+  --bg-surface-hover: #eef2f8;
+  --bg-inset: #f0f3f9;
 
-  /* Borders */
-  --border-default: #e2e8f0;
-  --border-subtle: #f1f5f9;
-  --border-strong: #cbd5e1;
+  /* Borders. Perceptible hairlines: 1.29:1 and 1.39:1 on white. */
+  --border-default: #d3dbe7;
+  --border-subtle: #dce3ed;
+  --border-strong: #b4c0d2;
 
-  /* Text */
+  /* Text. Primary 17.9:1, secondary 7.6:1, muted 4.76:1 — all clear of AA.
+     `--text-faint` is for decoration only (em-dash placeholders, disabled
+     glyphs) and is deliberately below it, but no longer invisible at 2.3:1. */
   --text-primary: #0f172a;
   --text-secondary: #475569;
-  --text-muted: #94a3b8;
-  --text-faint: #cbd5e1;
+  --text-muted: #64748b;
+  --text-faint: #9fabbe;
 
-  /* Accent */
-  --accent: #6366f1;
-  --accent-hover: #4f46e5;
+  /* Accent. Darkened one step: #6366f1 was 4.47:1, which just missed AA for
+     the accent-coloured text this theme uses for links and active tabs. */
+  --accent: #4f46e5;
+  --accent-hover: #4338ca;
   --accent-light: #eef2ff;
   --accent-muted: #c7d2fe;
 
-  /* Shadows */
-  --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.03);
-  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.04), 0 1px 2px rgba(0, 0, 0, 0.02);
-  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.05), 0 1px 3px rgba(0, 0, 0, 0.03);
-  --shadow-lg: 0 10px 40px rgba(0, 0, 0, 0.08), 0 2px 8px rgba(0, 0, 0, 0.04);
-  --shadow-xl: 0 20px 60px rgba(0, 0, 0, 0.1), 0 4px 16px rgba(0, 0, 0, 0.05);
-  --shadow-glow: 0 0 0 3px rgba(99, 102, 241, 0.15);
-  --shadow-glow-lg: 0 0 0 4px rgba(99, 102, 241, 0.1), 0 0 24px rgba(99, 102, 241, 0.08);
+  /* Shadows. Roughly tripled: the old alphas were invisible against a near
+     white page, so nothing ever looked raised. */
+  --shadow-xs: 0 1px 2px rgba(15, 23, 42, 0.06);
+  --shadow-sm: 0 1px 3px rgba(15, 23, 42, 0.09), 0 1px 2px rgba(15, 23, 42, 0.05);
+  --shadow-md: 0 4px 12px rgba(15, 23, 42, 0.11), 0 1px 3px rgba(15, 23, 42, 0.07);
+  --shadow-lg: 0 10px 40px rgba(15, 23, 42, 0.16), 0 2px 8px rgba(15, 23, 42, 0.09);
+  --shadow-xl: 0 20px 60px rgba(15, 23, 42, 0.2), 0 4px 16px rgba(15, 23, 42, 0.11);
+  --shadow-glow: 0 0 0 3px rgba(79, 70, 229, 0.18);
+  --shadow-glow-lg: 0 0 0 4px rgba(79, 70, 229, 0.12), 0 0 24px rgba(79, 70, 229, 0.1);
 
   /* Radius */
   --radius-sm: 8px;
@@ -61,7 +86,7 @@
   --sidebar-text-active: #ffffff;
 
   /* Header */
-  --header-bg: rgba(244, 246, 249, 0.85);
+  --header-bg: rgba(231, 236, 243, 0.88);
   --header-height: 60px;
 }
 
@@ -78,8 +103,11 @@
 
   --text-primary: #f1f5f9;
   --text-secondary: #8b97ad;
-  --text-muted: #4b5a72;
-  --text-faint: #2a3548;
+  /* Was #4b5a72, which is 2.59:1 on this surface — the same failure the light
+     theme had, and the same token. Lifted to 4.49:1. Dark backgrounds hide it
+     better, which is why only the light theme got complained about. */
+  --text-muted: #6e8099;
+  --text-faint: #3a4659;
 
   --accent: #818cf8;
   --accent-hover: #6366f1;
