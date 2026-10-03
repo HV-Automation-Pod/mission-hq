@@ -3,6 +3,8 @@
 import { EmployeeAnalytics } from "@/lib/types";
 import { CheckCircle2, XCircle, AlertTriangle, Shield, X, Calendar } from "lucide-react";
 import { useState } from "react";
+import { isRealWeek } from "@/lib/policy";
+import Tooltip from "./Tooltip";
 
 interface Props {
   analytics: EmployeeAnalytics[];
@@ -44,8 +46,8 @@ export default function ComplianceTracker({ analytics, selectedDept, dates }: Pr
       case "officeDays": cmp = (a.office + a.clientLocation + a.splitDay) - (b.office + b.clientLocation + b.splitDay); break;
       case "compliance": cmp = a.complianceRate - b.complianceRate; break;
       case "compliantWeeks": {
-        const aWeeks = a.weeklyCompliance.filter(w => w.totalWorkDays >= 4);
-        const bWeeks = b.weeklyCompliance.filter(w => w.totalWorkDays >= 4);
+        const aWeeks = a.weeklyCompliance.filter(w => isRealWeek(w.availableDays));
+        const bWeeks = b.weeklyCompliance.filter(w => isRealWeek(w.availableDays));
         const aCompliant = aWeeks.filter(w => w.isCompliant).length;
         const bCompliant = bWeeks.filter(w => w.isCompliant).length;
         cmp = aCompliant - bCompliant;
@@ -80,7 +82,7 @@ export default function ComplianceTracker({ analytics, selectedDept, dates }: Pr
   // Calculate total weeks tracked
   const sampleAnalytics = filtered.length > 0 ? filtered[0] : null;
   const totalWeeksTracked = sampleAnalytics ? sampleAnalytics.weeklyCompliance.length : 0;
-  const completeWeeks = sampleAnalytics ? sampleAnalytics.weeklyCompliance.filter(w => w.totalWorkDays >= 4).length : 0;
+  const completeWeeks = sampleAnalytics ? sampleAnalytics.weeklyCompliance.filter(w => isRealWeek(w.availableDays)).length : 0;
 
   const summaryItems: { label: string; count: number; icon: React.ReactNode; color: string; filter: ViewFilter }[] = [
     { label: "Compliant (≥80%)", count: compliant.length, icon: <CheckCircle2 size={14} />, color: "text-emerald-500", filter: "compliant" },
@@ -181,13 +183,13 @@ export default function ComplianceTracker({ analytics, selectedDept, dates }: Pr
                 Department <SortIcon field="department" />
               </th>
               <th onClick={() => toggleSort("officeDays")} className="text-center py-2.5 px-3 font-medium cursor-pointer select-none" style={{ color: "var(--text-secondary)" }}>
-                <span title="Total office days (Office + Client + Split Day) out of total working days">Office Days <SortIcon field="officeDays" /></span>
+                <Tooltip width={230} side="bottom" label="Office days counted on their own: Office, Client Location and half of a Split Day."><span >Office Days <SortIcon field="officeDays" /></span></Tooltip>
               </th>
               <th onClick={() => toggleSort("compliantWeeks")} className="text-center py-2.5 px-3 font-medium cursor-pointer select-none" style={{ color: "var(--text-secondary)" }}>
-                <span title="Weeks with 4+ office days out of total complete weeks">Weeks Met <SortIcon field="compliantWeeks" /></span>
+                <Tooltip width={230} side="bottom" label="Weeks where they were in an office every available day. A Wednesday at home counts in full."><span >Weeks Met <SortIcon field="compliantWeeks" /></span></Tooltip>
               </th>
               <th onClick={() => toggleSort("compliance")} className="text-center py-2.5 px-3 font-medium cursor-pointer select-none" style={{ color: "var(--text-secondary)" }}>
-                <span title="Percentage of complete weeks where 4-day office requirement was met">Rate <SortIcon field="compliance" /></span>
+                <Tooltip width={230} side="bottom" label="Share of their weeks that met the policy. Weeks with nothing available — all leave — are left out rather than counted as failures."><span >Rate <SortIcon field="compliance" /></span></Tooltip>
               </th>
               <th className="text-center py-2.5 px-3 w-10"></th>
             </tr>
@@ -195,7 +197,7 @@ export default function ComplianceTracker({ analytics, selectedDept, dates }: Pr
           <tbody>
             {sorted.map((emp) => {
               const officeDays = emp.office + emp.clientLocation + emp.splitDay;
-              const empCompleteWeeks = emp.weeklyCompliance.filter(w => w.totalWorkDays >= 4);
+              const empCompleteWeeks = emp.weeklyCompliance.filter(w => isRealWeek(w.availableDays));
               const empCompliantWeeks = empCompleteWeeks.filter(w => w.isCompliant).length;
               return (
                 <tr key={emp.email} className="table-row-hover" style={{ borderTop: "1px solid var(--border-subtle)" }}>

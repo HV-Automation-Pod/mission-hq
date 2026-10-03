@@ -6,6 +6,7 @@ import { useEffect, useMemo, useState } from "react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell, Area, AreaChart, ReferenceLine } from "recharts";
 import { format, parseISO, startOfWeek, addDays, isBefore, startOfMonth, endOfMonth } from "date-fns";
 import { Sparkles, TrendingUp, TrendingDown, ChevronLeft, ChevronRight } from "lucide-react";
+import { scorePeriod } from "@/lib/policy";
 
 const CHART_COLORS = {
   light: { grid: "#f1f5f9", tick: "#94a3b8", ref: "#ef4444", bg: "#ffffff", border: "#e2e8f0", text: "#0f172a", sub: "#64748b" },
@@ -766,28 +767,30 @@ interface TeamComplianceProps { employees: Employee[]; dates: string[]; }
 export function TeamComplianceChart({ employees, dates }: TeamComplianceProps) {
   const { theme } = useTheme();
   const c = CHART_COLORS[theme === "dark" ? "dark" : "light"];
-  const departments: Record<string, { total: number; officeDays: number }> = {};
+  // Scored by lib/policy.ts, same as every other compliance number here.
+  // The previous version added to the denominator for days a person had no
+  // status at all, so a team with new joiners sank for days nobody had asked
+  // them about, and it counted a Split Day as a whole office day.
+  const window = dates.slice(-5);
+  const departments: Record<string, { available: number; adherent: number }> = {};
 
   employees.forEach((emp) => {
+    const score = scorePeriod(emp.statuses, window, emp.allowance);
     const depts = emp.departments?.length > 0 ? emp.departments : [emp.department || "Unassigned"];
     depts.forEach((dept) => {
-      if (!departments[dept]) departments[dept] = { total: 0, officeDays: 0 };
-      dates.slice(-5).forEach((d) => {
-        const status = emp.statuses[d];
-        departments[dept].total++;
-        if (status === "Office" || status === "Client Location" || status === "Split Day") {
-          departments[dept].officeDays++;
-        }
-      });
+      if (!departments[dept]) departments[dept] = { available: 0, adherent: 0 };
+      departments[dept].available += score.available;
+      departments[dept].adherent += score.adherent;
     });
   });
 
   const data = Object.entries(departments)
-    .map(([department, val]) => ({ department, "Office %": Math.round((val.officeDays / val.total) * 100) }))
+    .filter(([, val]) => val.available > 0)
+    .map(([department, val]) => ({ department, "Office %": Math.round((val.adherent / val.available) * 100) }))
     .sort((a, b) => b["Office %"] - a["Office %"]);
 
   return (
-    <ChartCard title="Department Office Attendance" subtitle="Last 5 working days vs 80% target">
+    <ChartCard title="Department Office Attendance" subtitle="Last 5 working days vs 80% target · Wednesday WFH counts in full">
       <ResponsiveContainer width="100%" height={Math.max(200, data.length * 44 + 40)}>
         <BarChart data={data} barSize={22} layout="vertical">
           <CartesianGrid strokeDasharray="3 3" stroke={c.grid} horizontal={false} />
@@ -823,25 +826,27 @@ interface WeeklyTrendProps { employees: Employee[]; dates: string[]; }
 export function WeeklyOfficeTrend({ employees, dates }: WeeklyTrendProps) {
   const { theme } = useTheme();
   const c = CHART_COLORS[theme === "dark" ? "dark" : "light"];
-  const weekMap: Record<string, { total: number; office: number }> = {};
-
+  // Group the window into weeks, then score each person's week with the shared
+  // policy and sum. Scoring a week at a time rather than a day at a time is
+  // what lets a Wednesday at home count: the rule needs to know the weekday.
+  const weekDates: Record<string, string[]> = {};
   dates.forEach((d) => {
-    const date = parseISO(d);
-    const weekLabel = format(date, "'W'w MMM");
-    if (!weekMap[weekLabel]) weekMap[weekLabel] = { total: 0, office: 0 };
-    employees.forEach((emp) => {
-      const status = emp.statuses[d];
-      if (status) {
-        weekMap[weekLabel].total++;
-        if (status === "Office" || status === "Client Location" || status === "Split Day") weekMap[weekLabel].office++;
-      }
-    });
+    const weekLabel = format(parseISO(d), "'W'w MMM");
+    (weekDates[weekLabel] ||= []).push(d);
   });
 
-  const data = Object.entries(weekMap).map(([week, val]) => ({
-    week,
-    "Office %": Math.round((val.office / val.total) * 100),
-  }));
+  const data = Object.entries(weekDates)
+    .map(([week, days]) => {
+      let adherent = 0, available = 0;
+      employees.forEach((emp) => {
+        const score = scorePeriod(emp.statuses, days, emp.allowance);
+        adherent += score.adherent;
+        available += score.available;
+      });
+      return { week, "Office %": available > 0 ? Math.round((adherent / available) * 100) : 0, available };
+    })
+    .filter((w) => w.available > 0)
+    .map(({ week, "Office %": pct }) => ({ week, "Office %": pct }));
 
   const gradientId = theme === "dark" ? "officeGradientDark" : "officeGradientLight";
 

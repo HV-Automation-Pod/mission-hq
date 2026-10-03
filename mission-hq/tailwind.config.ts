@@ -1,47 +1,35 @@
 import type { Config } from "tailwindcss";
 
-const config: Config = {
-  darkMode: "class",
-  content: [
-    "./src/pages/**/*.{js,ts,jsx,tsx,mdx}",
-    "./src/components/**/*.{js,ts,jsx,tsx,mdx}",
-    "./src/app/**/*.{js,ts,jsx,tsx,mdx}",
-  ],
+/**
+ * Every colour is a CSS variable, so the theme switches without a class on
+ * every element and a new palette is one file to edit.
+ */
+export default {
+  content: ["./src/**/*.{ts,tsx}"],
   theme: {
     extend: {
-      fontFamily: {
-        sans: ["var(--font-poppins)", "-apple-system", "BlinkMacSystemFont", "Segoe UI", "system-ui", "sans-serif"],
-        mono: ["var(--font-mono)", "SF Mono", "Fira Code", "monospace"],
-      },
       colors: {
-        background: "var(--bg-app)",
-        foreground: "var(--text-primary)",
-        surface: {
-          DEFAULT: "var(--bg-surface)",
-          secondary: "var(--bg-surface-secondary)",
-          hover: "var(--bg-surface-hover)",
-        },
-        border: {
-          DEFAULT: "var(--border-default)",
-          subtle: "var(--border-subtle)",
-        },
+        bg: "var(--bg)",
+        surface: "var(--surface)",
+        "surface-2": "var(--surface-2)",
+        border: "var(--border)",
+        "border-soft": "var(--border-soft)",
+        text: "var(--text)",
+        "text-2": "var(--text-2)",
+        "text-3": "var(--text-3)",
+        accent: "var(--accent)",
+        "accent-soft": "var(--accent-soft)",
+        "accent-text": "var(--accent-text)",
+        office: "var(--office)", "office-soft": "var(--office-soft)",
+        home: "var(--home)", "home-soft": "var(--home-soft)",
+        leave: "var(--leave)", "leave-soft": "var(--leave-soft)",
+        pending: "var(--pending)", "pending-soft": "var(--pending-soft)",
+        away: "var(--away)", "away-soft": "var(--away-soft)",
+        danger: "var(--danger)", "danger-soft": "var(--danger-soft)",
       },
-      borderRadius: {
-        sm: "var(--radius-sm)",
-        md: "var(--radius-md)",
-        lg: "var(--radius-lg)",
-        xl: "var(--radius-xl)",
-      },
-      boxShadow: {
-        xs: "var(--shadow-xs)",
-        sm: "var(--shadow-sm)",
-        md: "var(--shadow-md)",
-        lg: "var(--shadow-lg)",
-        xl: "var(--shadow-xl)",
-        glow: "var(--shadow-glow)",
-      },
+      borderRadius: { DEFAULT: "var(--radius)" },
+      boxShadow: { card: "var(--shadow)" },
     },
   },
   plugins: [],
-};
-export default config;
+} satisfies Config;

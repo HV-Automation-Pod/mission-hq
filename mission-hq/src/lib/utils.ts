@@ -1,12 +1,17 @@
 import { Employee, EmployeeAnalytics, WeekCompliance } from "./types";
+import { scorePeriod, type Allowance } from "./policy";
 import { startOfWeek, endOfWeek, format, parseISO, isWithinInterval, eachWeekOfInterval, isSameWeek } from "date-fns";
 
 const OFFICE_STATUSES = ["Office", "Client Location", "Split Day"];
 
+/**
+ * Cut the window into Monday-start weeks and score each one with the shared
+ * policy, so this agrees with the fortnightly Slack report by construction.
+ */
 export function calculateWeeklyCompliance(
   statuses: Record<string, string>,
   dates: string[],
-  requiredDays: number = 4
+  allowance?: Allowance,
 ): WeekCompliance[] {
   if (dates.length === 0) return [];
 
@@ -27,20 +32,18 @@ export function calculateWeeklyCompliance(
       return isSameWeek(date, weekStart, { weekStartsOn: 1 });
     });
 
-    const officeDays = weekDates.filter(
-      (d) => statuses[d] && OFFICE_STATUSES.includes(statuses[d])
-    ).length;
-
-    const totalWorkDays = weekDates.length;
+    const score = scorePeriod(statuses, weekDates, allowance);
 
     return {
       weekLabel: `${format(weekStart, "MMM d")} - ${format(weekEnd, "MMM d")}`,
       weekStart: format(weekStart, "yyyy-MM-dd"),
       weekEnd: format(weekEnd, "yyyy-MM-dd"),
-      totalWorkDays,
-      officeDays,
-      isCompliant: officeDays >= requiredDays,
-      requiredDays,
+      promptedDays: score.prompted,
+      availableDays: score.available,
+      adherentDays: score.adherent,
+      wfhOffWedDays: score.wfhOffWed,
+      pct: score.pct,
+      isCompliant: score.isCompliant,
     };
   });
 }
@@ -48,7 +51,6 @@ export function calculateWeeklyCompliance(
 export function computeEmployeeAnalytics(
   employee: Employee,
   dates: string[],
-  requiredDays: number = 4
 ): EmployeeAnalytics {
   let office = 0, home = 0, clientLocation = 0, splitDay = 0, travel = 0, leave = 0, anywhere = 0, pending = 0;
 
@@ -67,8 +69,11 @@ export function computeEmployeeAnalytics(
     }
   });
 
-  const weeklyCompliance = calculateWeeklyCompliance(employee.statuses, dates, requiredDays);
-  const completeWeeks = weeklyCompliance.filter((w) => w.totalWorkDays >= 4);
+  const weeklyCompliance = calculateWeeklyCompliance(employee.statuses, dates, employee.allowance);
+  // Rate only over weeks that were a real week. A Monday-only stub at the edge
+  // of the window, or a week that was all leave, would otherwise count as a
+  // failed week against someone who was never asked to attend one.
+  const completeWeeks = weeklyCompliance.filter((w) => w.availableDays >= 3);
   const compliantWeeks = completeWeeks.filter((w) => w.isCompliant).length;
   const complianceRate = completeWeeks.length > 0 ? (compliantWeeks / completeWeeks.length) * 100 : 0;
 

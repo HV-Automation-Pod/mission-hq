@@ -3,16 +3,26 @@
 import { Employee } from "@/lib/types";
 import { useState, useMemo } from "react";
 import { CheckCircle2, XCircle, Building2, ChevronDown, ChevronUp, Trophy, AlertCircle, Sparkles } from "lucide-react";
-import { startOfWeek, addDays, format, startOfMonth, endOfMonth, isBefore } from "date-fns";
+import { startOfWeek, addDays, format, startOfMonth, endOfMonth } from "date-fns";
+import { scorePeriod, fmtDays, isRealWeek, type PeriodScore } from "@/lib/policy";
+import Tooltip from "./Tooltip";
 
-const OFFICE_STATUSES = ["Office", "Client Location", "Split Day"];
-const REQUIRED_DAYS = 4;
-
-// Holidays in YYYY-MM-DD format
-const HOLIDAYS = new Set([
-  "2026-04-03", "2026-05-01", "2026-08-15", "2026-10-02",
-  "2026-11-01", "2026-11-09", "2026-11-10", "2026-12-25",
-]);
+/*
+ * Scored by `lib/policy.ts` — the same rule as the fortnightly Slack report.
+ *
+ * This screen used to count `officeDays >= 4` and ignore WHICH day. In a week
+ * like Sep 28 - Oct 2 (four working days; Oct 2 was Gandhi Jayanti) somebody
+ * following the policy exactly — office Mon, Tue, Thu, home Wednesday — scored
+ * 3/4 and read as non-compliant, while Slack called the same fortnight 100%.
+ * Wednesday WFH now counts in full, and the target is "every available day",
+ * which lands on 4 in an ordinary week without hardcoding the number 4.
+ *
+ * There is also no holiday list here any more. A day with no attendance row is
+ * a day nobody was asked about, so holidays, weekends, future days and days
+ * before somebody joined all drop out on their own — the way they do in SQL.
+ * The old hardcoded 2026 list would have needed editing every January and
+ * would have disagreed with the database the moment PnC moved a holiday.
+ */
 
 type PeriodTab = "this" | "last" | "month";
 
@@ -30,45 +40,40 @@ export default function WeeklyOfficeCompliance({ employees, dates }: Props) {
   const lastMonday = addDays(thisMonday, -7);
   const monday = periodTab === "last" ? lastMonday : thisMonday;
 
-  // Get Mon-Fri dates for the selected week, excluding holidays
-  const weekDates = useMemo(() => {
+  // Mon-Fri of the selected week. Handed to the scorer whole: it keeps the
+  // days this person was actually asked about and discards the rest.
+  const weekDates = useMemo(
+    () => Array.from({ length: 5 }, (_, i) => format(addDays(monday, i), "yyyy-MM-dd")),
+    [monday],
+  );
+
+  // For the header only. Days anybody was prompted on, which is the week's
+  // working days once holidays and the future have excluded themselves.
+  const workingDaysCount = useMemo(() => {
     const dateSet = new Set(dates);
-    return Array.from({ length: 5 }, (_, i) => {
-      const day = addDays(monday, i);
-      const dateStr = format(day, "yyyy-MM-dd");
-      const isHoliday = HOLIDAYS.has(dateStr);
-      const isFuture = day > today;
-      return { dateStr, isHoliday, isFuture, hasData: dateSet.has(dateStr) };
-    }).filter((d) => !d.isHoliday && !d.isFuture);
-  }, [monday, dates, today]);
+    return weekDates.filter((d) => dateSet.has(d)).length;
+  }, [weekDates, dates]);
 
-  const workingDaysCount = weekDates.length;
-  const requiredDays = Math.min(REQUIRED_DAYS, workingDaysCount);
-
-  // Calculate office days per employee for this week
   const employeeStats = useMemo(() => {
-    return employees.map((emp) => {
-      let officeDays = 0;
-      weekDates.forEach(({ dateStr, hasData }) => {
-        if (hasData) {
-          const status = emp.statuses[dateStr];
-          if (status && OFFICE_STATUSES.includes(status)) officeDays++;
-        }
-      });
-      return {
-        name: emp.name,
-        email: emp.email,
-        departments: emp.departments,
-        department: emp.department,
-        officeDays,
-        isCompliant: officeDays >= requiredDays,
-      };
-    }).sort((a, b) => b.officeDays - a.officeDays);
-  }, [employees, weekDates, requiredDays]);
+    return employees.map((emp) => ({
+      name: emp.name,
+      email: emp.email,
+      departments: emp.departments,
+      department: emp.department,
+      score: scorePeriod(emp.statuses, weekDates, emp.allowance),
+    }))
+      // Compliant first, then by how close they got. Somebody with nothing
+      // available — a full week of leave — sorts last rather than as a 0%.
+      .sort((a, b) => (b.score.pct ?? -1) - (a.score.pct ?? -1) || b.score.adherent - a.score.adherent);
+  }, [employees, weekDates]);
 
-  const compliantCount = employeeStats.filter((e) => e.isCompliant).length;
-  const nonCompliantCount = employeeStats.length - compliantCount;
-  const complianceRate = employeeStats.length > 0 ? Math.round((compliantCount / employeeStats.length) * 100) : 0;
+  // Anybody with nothing available is out of both the numerator and the
+  // denominator: a week of leave is not a pass and not a failure.
+  const scored = employeeStats.filter((e) => e.score.pct !== null);
+  const compliantCount = scored.filter((e) => e.score.isCompliant).length;
+  const nonCompliantCount = scored.length - compliantCount;
+  const complianceRate = scored.length > 0 ? Math.round((compliantCount / scored.length) * 100) : 0;
+  const onLeaveCount = employeeStats.length - scored.length;
 
   const weekLabel = `${format(addDays(monday, 0), "MMM d")} – ${format(addDays(monday, 4), "MMM d")}`;
   const isCurrentWeekPartial = periodTab === "this" && workingDaysCount < 5;
@@ -80,72 +85,50 @@ export default function WeeklyOfficeCompliance({ employees, dates }: Props) {
     if (periodTab !== "month") return null;
     const monthStart = startOfMonth(today);
     const monthEnd = endOfMonth(today);
-    const dateSet = new Set(dates);
+    const todayStr = format(today, "yyyy-MM-dd");
 
-    // Build week ranges (Mon-Fri) intersecting the month
-    const weeks: { weekIdx: number; mondayStr: string; days: { dateStr: string; isHoliday: boolean; isFuture: boolean; hasData: boolean; inMonth: boolean }[] }[] = [];
+    // Mon-Fri runs intersecting the month, clipped to in-month days. A week
+    // straddling the 1st is scored on its in-month half only, so October does
+    // not inherit a judgement about September.
+    const weeks: { mondayStr: string; days: string[]; isCurrentWeek: boolean }[] = [];
     let cursor = startOfWeek(monthStart, { weekStartsOn: 1 });
-    let weekIdx = 0;
     while (cursor <= monthEnd) {
-      const days = Array.from({ length: 5 }, (_, i) => {
-        const day = addDays(cursor, i);
-        const dateStr = format(day, "yyyy-MM-dd");
-        return {
-          dateStr,
-          isHoliday: HOLIDAYS.has(dateStr),
-          isFuture: isBefore(today, day) && dateStr !== format(today, "yyyy-MM-dd"),
-          hasData: dateSet.has(dateStr),
-          inMonth: day.getMonth() === monthStart.getMonth(),
-        };
-      });
-      // Only include weeks that have at least one in-month day
-      if (days.some((d) => d.inMonth)) {
-        weeks.push({ weekIdx, mondayStr: format(cursor, "MMM d"), days });
-        weekIdx++;
+      const all = Array.from({ length: 5 }, (_, i) => addDays(cursor, i));
+      const days = all
+        .filter((d) => d.getMonth() === monthStart.getMonth())
+        .map((d) => format(d, "yyyy-MM-dd"));
+      if (days.length > 0) {
+        weeks.push({
+          mondayStr: format(cursor, "MMM d"),
+          days,
+          isCurrentWeek: days.includes(todayStr),
+        });
       }
       cursor = addDays(cursor, 7);
     }
 
+    type EmpWeek = { score: PeriodScore; counts: boolean; isCurrentWeek: boolean };
     type EmpMonth = {
       name: string; email: string; departments: string[]; department: string;
-      weeks: { officeDays: number; workingDays: number; isCompliant: boolean; isComplete: boolean; isCurrentWeek: boolean }[];
-      totalOfficeDays: number;
+      weeks: EmpWeek[];
+      totalAdherent: number;
       compliantWeeks: number;
-      completedWeeks: number;
+      /** Weeks that were a real week FOR THIS PERSON. Somebody on leave for a
+       *  whole week has one fewer week to be judged on, not a failed one. */
+      countedWeeks: number;
       isPerfectMonth: boolean;
     };
 
-    const todayStr = format(today, "yyyy-MM-dd");
     const empData: EmpMonth[] = employees.map((emp) => {
-      const wkStats = weeks.map((w) => {
-        const eligibleDays = w.days.filter((d) => d.inMonth && !d.isHoliday && !d.isFuture);
-        let officeDays = 0;
-        eligibleDays.forEach(({ dateStr, hasData }) => {
-          if (hasData) {
-            const status = emp.statuses[dateStr];
-            if (status && OFFICE_STATUSES.includes(status)) officeDays++;
-          }
-        });
-        const workingDays = eligibleDays.length;
-        const fullWeekDays = w.days.filter((d) => d.inMonth && !d.isHoliday).length;
-        // A week is "complete" once all its working days are in the past (no future-in-month days remain)
-        const isComplete = workingDays === fullWeekDays && workingDays > 0;
-        const requiredForWeek = Math.min(REQUIRED_DAYS, fullWeekDays);
-        const isCurrentWeek = w.days.some((d) => d.dateStr === todayStr);
-        return {
-          officeDays,
-          workingDays,
-          isCompliant: officeDays >= requiredForWeek && requiredForWeek > 0,
-          isComplete,
-          isCurrentWeek,
-        };
+      const wkStats: EmpWeek[] = weeks.map((w) => {
+        const score = scorePeriod(emp.statuses, w.days, emp.allowance);
+        return { score, counts: isRealWeek(score.available), isCurrentWeek: w.isCurrentWeek };
       });
 
-      const totalOfficeDays = wkStats.reduce((s, w) => s + w.officeDays, 0);
-      const completedOnly = wkStats.filter((w) => w.isComplete);
-      const compliantWeeks = completedOnly.filter((w) => w.isCompliant).length;
-      const completedWeeks = completedOnly.length;
-      const isPerfectMonth = completedWeeks > 0 && compliantWeeks === completedWeeks;
+      const totalAdherent = wkStats.reduce((sum, w) => sum + w.score.adherent, 0);
+      const counted = wkStats.filter((w) => w.counts);
+      const compliantWeeks = counted.filter((w) => w.score.isCompliant).length;
+      const isPerfectMonth = counted.length > 0 && compliantWeeks === counted.length;
 
       return {
         name: emp.name,
@@ -153,26 +136,27 @@ export default function WeeklyOfficeCompliance({ employees, dates }: Props) {
         departments: emp.departments,
         department: emp.department,
         weeks: wkStats,
-        totalOfficeDays,
+        totalAdherent,
         compliantWeeks,
-        completedWeeks,
+        countedWeeks: counted.length,
         isPerfectMonth,
       };
     }).sort((a, b) => {
       if (a.isPerfectMonth !== b.isPerfectMonth) return a.isPerfectMonth ? -1 : 1;
       if (b.compliantWeeks !== a.compliantWeeks) return b.compliantWeeks - a.compliantWeeks;
-      return b.totalOfficeDays - a.totalOfficeDays;
+      return b.totalAdherent - a.totalAdherent;
     });
 
-    const totalWorkingDaysInMonth = weeks.flatMap((w) => w.days).filter((d) => d.inMonth && !d.isHoliday && !d.isFuture).length;
+    const dateSet = new Set(dates);
+    const totalWorkingDaysInMonth = weeks.flatMap((w) => w.days).filter((d) => dateSet.has(d)).length;
     const perfectMonthCount = empData.filter((e) => e.isPerfectMonth).length;
-    const atRiskCount = empData.filter((e) => e.completedWeeks > 0 && e.compliantWeeks === 0).length;
+    const atRiskCount = empData.filter((e) => e.countedWeeks > 0 && e.compliantWeeks === 0).length;
 
-    // Avg compliance: each employee's (compliantWeeks / completedWeeks)
-    const avgCompliance = empData.length > 0
-      ? Math.round(
-          empData.reduce((sum, e) => sum + (e.completedWeeks > 0 ? (e.compliantWeeks / e.completedWeeks) : 0), 0) / empData.length * 100
-        )
+    // Average of each person's compliantWeeks / countedWeeks. People with no
+    // counted week are left out entirely rather than averaged in as zero.
+    const judged = empData.filter((e) => e.countedWeeks > 0);
+    const avgCompliance = judged.length > 0
+      ? Math.round(judged.reduce((sum, e) => sum + e.compliantWeeks / e.countedWeeks, 0) / judged.length * 100)
       : 0;
 
     return {
@@ -199,12 +183,12 @@ export default function WeeklyOfficeCompliance({ employees, dates }: Props) {
           </div>
           <div>
             <h2 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>
-              {periodTab === "month" ? "Monthly 4-Day Office Tracker" : "Weekly 4-Day Office Check"}
+              {periodTab === "month" ? "Monthly Office Tracker" : "Weekly Office Check"}
             </h2>
             <p className="text-[11px]" style={{ color: "var(--text-muted)" }}>
               {periodTab === "month" && monthlyData
                 ? `${monthlyData.monthLabel} · ${monthlyData.weeks.length} week${monthlyData.weeks.length !== 1 ? "s" : ""} · ${monthlyData.totalWorkingDaysInMonth} working days so far`
-                : <>{weekLabel} &middot; {workingDaysCount} working day{workingDaysCount !== 1 ? "s" : ""}{isCurrentWeekPartial && " (in progress)"}</>
+                : <>{weekLabel} &middot; {workingDaysCount} working day{workingDaysCount !== 1 ? "s" : ""}{isCurrentWeekPartial && " (in progress)"} &middot; office every available day, Wednesday at home counts in full</>
               }
             </p>
           </div>
@@ -267,8 +251,8 @@ export default function WeeklyOfficeCompliance({ employees, dates }: Props) {
                 <tr>
                   <th className="text-left py-2.5 px-3 font-medium" style={{ color: "var(--text-secondary)" }}>Employee</th>
                   <th className="text-left py-2.5 px-3 font-medium hidden md:table-cell" style={{ color: "var(--text-secondary)" }}>Department</th>
-                  <th className="text-center py-2.5 px-3 font-medium" style={{ color: "var(--text-secondary)" }}>Weekly Office Days</th>
-                  <th className="text-center py-2.5 px-3 font-medium hidden sm:table-cell" style={{ color: "var(--text-secondary)" }}>Total</th>
+                  <th className="text-center py-2.5 px-3 font-medium" style={{ color: "var(--text-secondary)" }}>Week by week</th>
+                  <th className="text-center py-2.5 px-3 font-medium hidden sm:table-cell" style={{ color: "var(--text-secondary)" }}>Adherent</th>
                   <th className="text-center py-2.5 px-3 font-medium w-20" style={{ color: "var(--text-secondary)" }}>Weeks Met</th>
                 </tr>
               </thead>
@@ -311,7 +295,7 @@ export default function WeeklyOfficeCompliance({ employees, dates }: Props) {
                       <WeeklyMiniBars weeks={emp.weeks} weekLabels={monthlyData.weeks.map((w) => w.mondayStr)} />
                     </td>
                     <td className="py-2.5 px-3 text-center hidden sm:table-cell">
-                      <span className="text-sm font-bold font-mono" style={{ color: "var(--text-primary)" }}>{emp.totalOfficeDays}</span>
+                      <span className="text-sm font-bold font-mono" style={{ color: "var(--text-primary)" }}>{fmtDays(emp.totalAdherent)}</span>
                       <span className="text-[10px] ml-0.5" style={{ color: "var(--text-muted)" }}>days</span>
                     </td>
                     <td className="py-2.5 px-3 text-center">
@@ -322,7 +306,7 @@ export default function WeeklyOfficeCompliance({ employees, dates }: Props) {
                             ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400"
                             : "bg-red-100 text-red-600 dark:bg-red-900/30 dark:text-red-400"
                       }`}>
-                        <span className="font-mono">{emp.compliantWeeks}/{emp.completedWeeks || "—"}</span>
+                        <span className="font-mono">{emp.compliantWeeks}/{emp.countedWeeks || "\u2014"}</span>
                       </div>
                     </td>
                   </tr>
@@ -356,7 +340,7 @@ export default function WeeklyOfficeCompliance({ employees, dates }: Props) {
               <div className="flex items-center gap-2">
                 <CheckCircle2 size={16} className="text-emerald-500" />
                 <span className="text-2xl font-bold font-mono" style={{ color: "var(--text-primary)" }}>{compliantCount}</span>
-                <span className="text-[11px]" style={{ color: "var(--text-muted)" }}>/ {employeeStats.length}</span>
+                <span className="text-[11px]" style={{ color: "var(--text-muted)" }}>/ {scored.length}</span>
               </div>
             </div>
             <div className="p-3.5 rounded-xl border" style={{ background: "var(--bg-inset)", borderColor: "var(--border-subtle)" }}>
@@ -364,8 +348,13 @@ export default function WeeklyOfficeCompliance({ employees, dates }: Props) {
               <div className="flex items-center gap-2">
                 <XCircle size={16} className="text-red-400" />
                 <span className="text-2xl font-bold font-mono" style={{ color: "var(--text-primary)" }}>{nonCompliantCount}</span>
-                <span className="text-[11px]" style={{ color: "var(--text-muted)" }}>/ {employeeStats.length}</span>
+                <span className="text-[11px]" style={{ color: "var(--text-muted)" }}>/ {scored.length}</span>
               </div>
+              {onLeaveCount > 0 && (
+                <div className="text-[10px] mt-0.5" style={{ color: "var(--text-muted)" }}>
+                  {onLeaveCount} not scored (leave or away all week)
+                </div>
+              )}
             </div>
           </div>
 
@@ -376,7 +365,7 @@ export default function WeeklyOfficeCompliance({ employees, dates }: Props) {
                 <tr>
                   <th className="text-left py-2.5 px-3 font-medium" style={{ color: "var(--text-secondary)" }}>Employee</th>
                   <th className="text-left py-2.5 px-3 font-medium hidden sm:table-cell" style={{ color: "var(--text-secondary)" }}>Department</th>
-                  <th className="text-center py-2.5 px-3 font-medium" style={{ color: "var(--text-secondary)" }}>Office Days</th>
+                  <th className="text-center py-2.5 px-3 font-medium" style={{ color: "var(--text-secondary)" }}>Adherent / Available</th>
                   <th className="text-center py-2.5 px-3 font-medium w-10" style={{ color: "var(--text-secondary)" }}>Status</th>
                 </tr>
               </thead>
@@ -386,7 +375,9 @@ export default function WeeklyOfficeCompliance({ employees, dates }: Props) {
                     <td className="py-2.5 px-3">
                       <div className="flex items-center gap-2.5">
                         <div className={`avatar w-7 h-7 text-[10px] ${
-                          emp.isCompliant
+                          emp.score.pct === null
+                            ? "bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400"
+                            : emp.score.isCompliant
                             ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-400"
                             : "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400"
                         }`}>
@@ -408,21 +399,34 @@ export default function WeeklyOfficeCompliance({ employees, dates }: Props) {
                       ) : emp.department}
                     </td>
                     <td className="py-2.5 px-3 text-center">
-                      <div className="flex items-center justify-center gap-1.5">
-                        <span className="text-sm font-bold font-mono" style={{ color: "var(--text-primary)" }}>{emp.officeDays}</span>
-                        <span className="text-[11px]" style={{ color: "var(--text-muted)" }}>/ {requiredDays}</span>
-                      </div>
-                      <div className="w-16 mx-auto rounded-full h-1.5 mt-1" style={{ background: "var(--bg-inset)" }}>
-                        <div
-                          className={`h-1.5 rounded-full transition-all duration-300 ${emp.isCompliant ? "bg-emerald-500" : emp.officeDays >= requiredDays - 1 ? "bg-amber-500" : "bg-red-400"}`}
-                          style={{ width: `${Math.min((emp.officeDays / requiredDays) * 100, 100)}%` }}
-                        />
-                      </div>
+                      {emp.score.pct === null ? (
+                        <span className="text-[11px]" style={{ color: "var(--text-muted)" }}>Not scored</span>
+                      ) : (
+                        <>
+                          <Tooltip width={220} label={
+                            `${fmtDays(emp.score.wfo)} office + ${fmtDays(emp.score.adherent - emp.score.wfo)} Wednesday WFH, out of ${fmtDays(emp.score.available)} available` +
+                            (emp.score.wfhOffWed > 0 ? ` \u00b7 ${fmtDays(emp.score.wfhOffWed)} WFH on another weekday` : "") +
+                            (emp.score.pending > 0 ? ` \u00b7 ${fmtDays(emp.score.pending)} unanswered` : "")}>
+                            <span className="flex items-center justify-center gap-1.5">
+                              <span className="text-sm font-bold font-mono" style={{ color: "var(--text-primary)" }}>{fmtDays(emp.score.adherent)}</span>
+                              <span className="text-[11px]" style={{ color: "var(--text-muted)" }}>/ {fmtDays(emp.score.available)}</span>
+                            </span>
+                          </Tooltip>
+                          <div className="w-16 mx-auto rounded-full h-1.5 mt-1" style={{ background: "var(--bg-inset)" }}>
+                            <div
+                              className={`h-1.5 rounded-full transition-all duration-300 ${emp.score.isCompliant ? "bg-emerald-500" : emp.score.pct >= 75 ? "bg-amber-500" : "bg-red-400"}`}
+                              style={{ width: `${Math.min(emp.score.pct, 100)}%` }}
+                            />
+                          </div>
+                        </>
+                      )}
                     </td>
                     <td className="py-2.5 px-3 text-center">
-                      {emp.isCompliant
-                        ? <CheckCircle2 size={16} className="text-emerald-500 inline" />
-                        : <XCircle size={16} className="text-red-400 inline" />
+                      {emp.score.pct === null
+                        ? <span className="text-xs" style={{ color: "var(--text-faint)" }}>&mdash;</span>
+                        : emp.score.isCompliant
+                          ? <CheckCircle2 size={16} className="text-emerald-500 inline" />
+                          : <XCircle size={16} className="text-red-400 inline" />
                       }
                     </td>
                   </tr>
@@ -446,31 +450,38 @@ export default function WeeklyOfficeCompliance({ employees, dates }: Props) {
   );
 }
 
-// Per-employee mini bars showing each week's office days within the month
+/**
+ * One bar per week, filled by how close that week came to the policy.
+ *
+ * The bar is a PERCENTAGE, not a day count, so a four-day holiday week and a
+ * five-day week both reach the top when the person adhered — which is the
+ * point: the old bars divided by a fixed 4 and so left a perfect short week
+ * looking like a miss.
+ */
 function WeeklyMiniBars({ weeks, weekLabels }: {
-  weeks: { officeDays: number; workingDays: number; isCompliant: boolean; isComplete: boolean; isCurrentWeek: boolean }[];
+  weeks: { score: PeriodScore; counts: boolean; isCurrentWeek: boolean }[];
   weekLabels: string[];
 }) {
-  const MAX_DAYS = 4; // height max
   return (
     <div className="flex items-end justify-center gap-1.5 h-9">
       {weeks.map((w, i) => {
-        const heightPct = w.workingDays > 0
-          ? Math.min(100, (w.officeDays / MAX_DAYS) * 100)
-          : 0;
-        const color = !w.isComplete && !w.isCurrentWeek
+        const pct = w.score.pct;
+        const heightPct = pct === null ? 0 : Math.min(100, pct);
+        const color = pct === null
           ? "var(--text-faint)"
-          : w.isCompliant
+          : w.score.isCompliant
             ? "#22c55e"
-            : w.officeDays >= 3
+            : pct >= 75
               ? "#f59e0b"
-              : w.officeDays >= 1
+              : pct >= 25
                 ? "#fb923c"
                 : "#ef4444";
-        const opacity = !w.isComplete && !w.isCurrentWeek ? 0.45 : w.isCurrentWeek && !w.isComplete ? 0.85 : 1;
+        const opacity = pct === null ? 0.45 : w.isCurrentWeek ? 0.85 : 1;
         return (
-          <div key={i} className="flex flex-col items-center gap-0.5"
-            title={`${weekLabels[i] ?? `W${i + 1}`}: ${w.officeDays}/${w.workingDays || MAX_DAYS} office${w.isCurrentWeek ? " (in progress)" : !w.isComplete ? " (upcoming)" : ""}`}>
+          <Tooltip key={i} width={190} label={
+            `${weekLabels[i] ?? `W${i + 1}`}: ${pct === null ? "nothing available" : `${fmtDays(w.score.adherent)}/${fmtDays(w.score.available)} adherent (${pct}%)`}` +
+            (w.isCurrentWeek ? " \u00b7 in progress" : !w.counts && pct !== null ? " \u00b7 short week, not counted" : "")}>
+          <div className="flex flex-col items-center gap-0.5">
             <div className="relative w-3 h-7 rounded-sm flex items-end" style={{ background: "var(--bg-inset)" }}>
               <div
                 className="w-full rounded-sm transition-all duration-300"
@@ -482,10 +493,11 @@ function WeeklyMiniBars({ weeks, weekLabels }: {
                 }}
               />
             </div>
-            <span className="text-[8px] font-mono leading-none" style={{ color: w.isComplete || w.isCurrentWeek ? "var(--text-muted)" : "var(--text-faint)" }}>
-              {w.officeDays || (w.workingDays === 0 && !w.isCurrentWeek ? "·" : 0)}
+            <span className="text-[8px] font-mono leading-none" style={{ color: w.counts || w.isCurrentWeek ? "var(--text-muted)" : "var(--text-faint)" }}>
+              {w.score.pct === null ? "\u00b7" : fmtDays(w.score.adherent)}
             </span>
           </div>
+          </Tooltip>
         );
       })}
     </div>

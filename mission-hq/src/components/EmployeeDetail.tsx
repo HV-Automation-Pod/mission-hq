@@ -4,6 +4,8 @@ import { Employee, STATUS_COLORS } from "@/lib/types";
 import { computeEmployeeAnalytics } from "@/lib/utils";
 import { X, CheckCircle2, XCircle, AlertTriangle, Building2, Home, MapPin, ArrowLeftRight, Plane, TreePalm, Globe, Mail, Briefcase, Flame, Trophy } from "lucide-react";
 import { useState } from "react";
+import { fmtDays } from "@/lib/policy";
+import Tooltip from "./Tooltip";
 
 interface Props {
   employee: Employee;
@@ -172,19 +174,21 @@ export default function EmployeeDetail({ employee, dates, onClose }: Props) {
                     const bg = STATUS_COLORS[status] || "#e5e7eb";
                     const dateObj = new Date(d + "T00:00:00");
                     return (
-                      <div key={d} className="rounded-md p-1.5 text-center border transition-transform hover:scale-105"
-                        style={{
-                          backgroundColor: status ? bg + "20" : "var(--bg-inset)",
-                          borderColor: status ? bg + "30" : "var(--border-subtle)",
-                        }}
-                        title={`${dateObj.toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "short" })}: ${status || "No data"}`}>
-                        <div className="text-[10px] font-bold font-mono" style={{ color: status ? bg : "var(--text-muted)" }}>
-                          {dateObj.toLocaleDateString("en-IN", { day: "numeric" })}
+                      <Tooltip key={d} className="w-full" side="bottom"
+                        label={`${dateObj.toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "short" })}: ${status || "No data"}`}>
+                        <div className="w-full rounded-md p-1.5 text-center border transition-transform hover:scale-105"
+                          style={{
+                            backgroundColor: status ? bg + "20" : "var(--bg-inset)",
+                            borderColor: status ? bg + "30" : "var(--border-subtle)",
+                          }}>
+                          <div className="text-[10px] font-bold font-mono" style={{ color: status ? bg : "var(--text-muted)" }}>
+                            {dateObj.toLocaleDateString("en-IN", { day: "numeric" })}
+                          </div>
+                          <div className="text-[7px]" style={{ color: "var(--text-muted)" }}>
+                            {dateObj.toLocaleDateString("en-IN", { weekday: "narrow" })}
+                          </div>
                         </div>
-                        <div className="text-[7px]" style={{ color: "var(--text-muted)" }}>
-                          {dateObj.toLocaleDateString("en-IN", { weekday: "narrow" })}
-                        </div>
-                      </div>
+                      </Tooltip>
                     );
                   })}
                 </div>
@@ -215,16 +219,19 @@ export default function EmployeeDetail({ employee, dates, onClose }: Props) {
                     </div>
                     <div className="flex-1 min-w-0">
                       <div className="font-semibold" style={{ color: "var(--text-primary)" }}>{w.weekLabel}</div>
-                      <div className="text-[11px]" style={{ color: "var(--text-muted)" }}>{w.officeDays} of {w.requiredDays} required</div>
+                      <div className="text-[11px]" style={{ color: "var(--text-muted)" }}>
+                        {fmtDays(w.adherentDays)} of {fmtDays(w.availableDays)} available day{w.availableDays === 1 ? "" : "s"}
+                        {w.wfhOffWedDays > 0 && ` · ${fmtDays(w.wfhOffWedDays)} WFH off-Wednesday`}
+                      </div>
                     </div>
                     <div className="flex-1 hidden sm:block">
                       <div className="rounded-full h-1.5" style={{ background: "var(--bg-inset)" }}>
                         <div className={`h-1.5 rounded-full transition-all duration-300 ${w.isCompliant ? "bg-emerald-500" : "bg-red-400"}`}
-                          style={{ width: `${Math.min((w.officeDays / 5) * 100, 100)}%` }} />
+                          style={{ width: `${w.pct === null ? 0 : Math.min(w.pct, 100)}%` }} />
                       </div>
                     </div>
                     <span className={`font-bold font-mono text-sm ${w.isCompliant ? "text-emerald-600 dark:text-emerald-400" : "text-red-500 dark:text-red-400"}`}>
-                      {w.officeDays}/{w.totalWorkDays}
+                      {fmtDays(w.adherentDays)}/{fmtDays(w.availableDays)}
                     </span>
                   </div>
                 ))}

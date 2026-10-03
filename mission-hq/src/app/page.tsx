@@ -12,14 +12,19 @@ import TeamBreakdown from "@/components/TeamBreakdown";
 import EmployeeDetail from "@/components/EmployeeDetail";
 import { DailyTrendChart, StatusPieChart, TeamComplianceChart, WeeklyOfficeTrend } from "@/components/Charts";
 import WeeklyOfficeCompliance from "@/components/WeeklyOfficeCompliance";
+import AdminPanel from "@/components/admin/AdminPanel";
 import LoadingScreen from "@/components/LoadingScreen";
+import Tooltip from "@/components/Tooltip";
 import {
   MapPin, BarChart3, Users, ShieldCheck, Download, Sun, Moon, TrendingUp,
   RefreshCw, AlertCircle, Clock, AlertTriangle, Search, X, Command,
-  Keyboard, Flame, Trophy, Award,
+  Keyboard, Flame, Trophy, Award, Settings,
 } from "lucide-react";
 
-type Tab = "overview" | "compliance" | "team" | "trends";
+type Tab = "overview" | "compliance" | "team" | "trends" | "admin";
+
+/** Tabs anybody may open. "admin" is added for admins once the data arrives. */
+const BASE_TABS = ["overview", "compliance", "team", "trends"] as const;
 
 const AUTO_REFRESH_INTERVAL = 5 * 60 * 1000;
 
@@ -111,10 +116,15 @@ export default function Dashboard() {
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  // Who is looking. The payload is already scoped server-side — a member's
+  // request never loads anybody else's attendance — so this only decides what
+  // is worth DRAWING, never what is allowed.
+  const [viewer, setViewer] = useState<{ email: string; role: string } | null>(null);
+  const isAdmin = viewer?.role === "admin";
   const [activeTab, setActiveTab] = useState<Tab>(() => {
     if (typeof window === "undefined") return "overview";
     const t = new URLSearchParams(window.location.search).get("tab");
-    return (["overview", "compliance", "team", "trends"].includes(t || "") ? t : "overview") as Tab;
+    return ([...BASE_TABS, "admin"].includes(t || "") ? t : "overview") as Tab;
   });
   const [showShortcuts, setShowShortcuts] = useState(false);
   const [cmdOpen, setCmdOpen] = useState(false);
@@ -157,6 +167,7 @@ export default function Dashboard() {
       const data = await fetchAllData();
       setEmployees(data.employees);
       setDates(data.dates);
+      setViewer(data.viewer ?? null);
       if (data.dates.length > 0 && !isRefresh) setSelectedDate(data.dates[data.dates.length - 1]);
       setLastUpdated(new Date());
     } catch (err) {
@@ -226,6 +237,7 @@ export default function Dashboard() {
       else if (e.key === "2") switchTab("compliance");
       else if (e.key === "3") switchTab("team");
       else if (e.key === "4") switchTab("trends");
+      else if (e.key === "5" && isAdmin) switchTab("admin");
       else if (e.key === "r" && !e.metaKey && !e.ctrlKey) loadData(true);
       else if (e.key === "d") toggleTheme();
       else if (e.key === "e") handleExport();
@@ -234,7 +246,7 @@ export default function Dashboard() {
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [loadData, toggleTheme, handleExport, switchTab]);
+  }, [loadData, toggleTheme, handleExport, switchTab, isAdmin]);
 
   const todayCounts = useMemo(() => {
     let office = 0, pending = 0;
@@ -251,6 +263,9 @@ export default function Dashboard() {
     { id: "compliance", label: "Compliance", icon: <ShieldCheck size={16} />, badge: alerts.nonCompliant > 0 ? alerts.nonCompliant : undefined },
     { id: "team", label: "Departments", icon: <Users size={16} /> },
     { id: "trends", label: "Trends", icon: <TrendingUp size={16} /> },
+    // Everything PnC used to do by opening the spreadsheet. Hidden from
+    // members, and the API behind it refuses them regardless.
+    ...(isAdmin ? [{ id: "admin" as Tab, label: "Admin", icon: <Settings size={16} /> }] : []),
   ];
 
   // ─── Loading: Mission Control acquiring signal ─────────
@@ -337,26 +352,26 @@ export default function Dashboard() {
               <kbd className="font-mono text-[10px] px-1 py-0.5 rounded" style={{ background: "var(--bg-inset)", border: "1px solid var(--border-default)" }}>⌘K</kbd>
             </button>
 
-            <button onClick={() => loadData(true)} disabled={refreshing}
+            <Tooltip label="Refresh" shortcut="R" side="bottom"><button onClick={() => loadData(true)} disabled={refreshing}
               className="p-2 rounded-lg transition-all active:scale-95 disabled:opacity-40 hover:bg-[var(--bg-surface-hover)]"
-              style={{ color: "var(--text-secondary)" }} title="Refresh (R)">
+              style={{ color: "var(--text-secondary)" }} >
               <RefreshCw size={16} className={refreshing ? "refresh-spin" : ""} />
-            </button>
-            <button onClick={toggleTheme}
+            </button></Tooltip>
+            <Tooltip label={theme === "light" ? "Dark mode" : "Light mode"} shortcut="D" side="bottom"><button onClick={toggleTheme}
               className="p-2 rounded-lg transition-all active:scale-95 hover:bg-[var(--bg-surface-hover)]"
-              style={{ color: "var(--text-secondary)" }} title={`${theme === "light" ? "Dark" : "Light"} mode (D)`}>
+              style={{ color: "var(--text-secondary)" }} >
               {theme === "light" ? <Moon size={16} /> : <Sun size={16} />}
-            </button>
-            <button onClick={() => setShowShortcuts(true)}
+            </button></Tooltip>
+            <Tooltip label="Keyboard shortcuts" shortcut="?" side="bottom"><button onClick={() => setShowShortcuts(true)}
               className="hidden sm:flex p-2 rounded-lg transition-all active:scale-95 hover:bg-[var(--bg-surface-hover)]"
-              style={{ color: "var(--text-secondary)" }} title="Shortcuts (?)">
+              style={{ color: "var(--text-secondary)" }} >
               <Keyboard size={16} />
-            </button>
-            <button onClick={handleExport}
+            </button></Tooltip>
+            <Tooltip label="Export as CSV" shortcut="E" side="bottom"><button onClick={handleExport}
               className="flex items-center gap-1.5 px-3 py-2 text-[13px] rounded-lg transition-all active:scale-95 font-medium hover:bg-[var(--bg-surface-hover)]"
-              style={{ color: "var(--text-secondary)" }} title="Export (E)">
+              style={{ color: "var(--text-secondary)" }} >
               <Download size={14} /> <span className="hidden sm:inline">Export</span>
-            </button>
+            </button></Tooltip>
           </div>
         </div>
 
@@ -387,11 +402,16 @@ export default function Dashboard() {
 
       {/* Main Content */}
       <main className="max-w-[1400px] mx-auto px-4 sm:px-6 py-5">
-        <div className="mb-5">
-          <Filters departments={departments} selectedDept={selectedDept} onDeptChange={setSelectedDept}
-            searchQuery={searchQuery} onSearchChange={setSearchQuery} selectedDate={selectedDate}
-            onDateChange={setSelectedDate} dates={dates} />
-        </div>
+        {/* The filters narrow the attendance data. The Admin tab edits people
+            records instead and has its own search per section, so showing them
+            there would be two search boxes that mean different things. */}
+        {activeTab !== "admin" && (
+          <div className="mb-5">
+            <Filters departments={departments} selectedDept={selectedDept} onDeptChange={setSelectedDept}
+              searchQuery={searchQuery} onSearchChange={setSearchQuery} selectedDate={selectedDate}
+              onDateChange={setSelectedDate} dates={dates} showDate={activeTab === "overview"} />
+          </div>
+        )}
 
         {/* Active filter context */}
         {(searchQuery || selectedDept !== "All") && filteredEmployees.length > 0 && (
@@ -634,6 +654,8 @@ export default function Dashboard() {
                 </div>
               </>
             )}
+
+            {activeTab === "admin" && isAdmin && <AdminPanel />}
           </div>
         )}
       </main>

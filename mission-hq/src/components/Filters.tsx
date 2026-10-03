@@ -12,6 +12,12 @@ interface Props {
   selectedDate: string;
   onDateChange: (date: string) => void;
   dates: string[];
+  /**
+   * The date picker drives the Overview snapshot and the status distribution
+   * and nothing else. On the other tabs it is a control that appears to do
+   * something and does not, which is worse than not offering it.
+   */
+  showDate?: boolean;
 }
 
 export default function Filters({
@@ -23,6 +29,7 @@ export default function Filters({
   selectedDate,
   onDateChange,
   dates,
+  showDate = true,
 }: Props) {
   const hasActiveFilters = selectedDept !== "All" || searchQuery.length > 0;
   const activeCount = (selectedDept !== "All" ? 1 : 0) + (searchQuery.length > 0 ? 1 : 0);
@@ -84,33 +91,36 @@ export default function Filters({
           ]}
         />
 
-        {/* Date */}
-        <CustomSelect
-          ariaLabel="Pick a date"
-          icon={<Calendar size={12} />}
-          value={selectedDate}
-          onChange={onDateChange}
-          align="right"
-          searchable
-          searchPlaceholder="Search dates…"
-          items={[...dates].reverse().map((d) => {
-            const dt = new Date(d + "T00:00:00");
-            return {
-              value: d,
-              label: dt.toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "short", year: "numeric" }),
-            };
-          })}
-          footer={
-            dates.length > 0 ? (
-              <div className="flex items-center justify-between">
-                <span>Tracking since</span>
-                <span className="font-mono font-medium" style={{ color: "var(--text-secondary)" }}>
-                  {new Date(dates[0] + "T00:00:00").toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}
-                </span>
-              </div>
-            ) : null
-          }
-        />
+        {/* Date. Hidden where it would do nothing: only the Overview
+            snapshot and status distribution read it. */}
+        {showDate && (
+          <CustomSelect
+            ariaLabel="Pick a date"
+            icon={<Calendar size={12} />}
+            value={selectedDate}
+            onChange={onDateChange}
+            align="right"
+            searchable
+            searchPlaceholder="Search dates…"
+            items={[...dates].reverse().map((d) => {
+              const dt = new Date(d + "T00:00:00");
+              return {
+                value: d,
+                label: dt.toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "short", year: "numeric" }),
+              };
+            })}
+            footer={
+              dates.length > 0 ? (
+                <div className="flex items-center justify-between">
+                  <span>Tracking since</span>
+                  <span className="font-mono font-medium" style={{ color: "var(--text-secondary)" }}>
+                    {new Date(dates[0] + "T00:00:00").toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}
+                  </span>
+                </div>
+              ) : null
+            }
+          />
+        )}
 
         {/* Clear */}
         {hasActiveFilters && (
