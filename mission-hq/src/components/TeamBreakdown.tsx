@@ -5,6 +5,7 @@ import StatusBadge from "./StatusBadge";
 import React, { useState, useMemo, useEffect } from "react";
 import { ChevronLeft, ChevronRight, Users } from "lucide-react";
 import { startOfMonth, endOfMonth, startOfWeek, addDays, parseISO, format } from "date-fns";
+import Tooltip from "./Tooltip";
 
 type ViewMode = "week" | "month";
 
@@ -147,7 +148,7 @@ export default function TeamBreakdown({ employees, dates, selectedDept }: Props)
           {/* Navigation */}
           {viewMode === "week" ? (
             <div className="flex items-center gap-1">
-              <NavTooltip
+              <Tooltip
                 label={prevMondayKey ? `Week of ${format(parseISO(prevMondayKey), "MMM d")}` : "No earlier data"}
                 shortcut={prevMondayKey ? "←" : undefined}
               >
@@ -160,11 +161,11 @@ export default function TeamBreakdown({ employees, dates, selectedDept }: Props)
                 >
                   <ChevronLeft size={15} />
                 </button>
-              </NavTooltip>
+              </Tooltip>
               <span className="text-[11px] min-w-[120px] text-center font-semibold tabular-nums" style={{ color: "var(--text-primary)" }}>
                 {format(parseISO(weekDates[0]), "MMM d")} – {format(parseISO(weekDates[4]), "MMM d")}
               </span>
-              <NavTooltip
+              <Tooltip
                 label={nextMondayKey ? `Week of ${format(parseISO(nextMondayKey), "MMM d")}` : "No later weeks"}
                 shortcut={nextMondayKey ? "→" : undefined}
               >
@@ -177,9 +178,9 @@ export default function TeamBreakdown({ employees, dates, selectedDept }: Props)
                 >
                   <ChevronRight size={15} />
                 </button>
-              </NavTooltip>
+              </Tooltip>
               <span className="mx-1 h-4 w-px" style={{ background: "var(--border-subtle)" }} />
-              <NavTooltip
+              <Tooltip
                 label={isCurrentWeek ? "You're here" : `Week of ${format(thisMonday, "MMM d")}`}
                 shortcut={isCurrentWeek ? undefined : "T"}
               >
@@ -197,11 +198,11 @@ export default function TeamBreakdown({ employees, dates, selectedDept }: Props)
                 >
                   This Week
                 </button>
-              </NavTooltip>
+              </Tooltip>
             </div>
           ) : (
             <div className="flex items-center gap-1">
-              <NavTooltip
+              <Tooltip
                 label={prevMonthKey ? format(parseISO(prevMonthKey + "-01"), "MMMM yyyy") : "No earlier data"}
                 shortcut={prevMonthKey ? "←" : undefined}
               >
@@ -214,11 +215,11 @@ export default function TeamBreakdown({ employees, dates, selectedDept }: Props)
                 >
                   <ChevronLeft size={15} />
                 </button>
-              </NavTooltip>
+              </Tooltip>
               <span className="text-[11px] min-w-[100px] text-center font-semibold tabular-nums" style={{ color: "var(--text-primary)" }}>
                 {format(monthAnchor, "MMM yyyy")}
               </span>
-              <NavTooltip
+              <Tooltip
                 label={nextMonthKey ? format(parseISO(nextMonthKey + "-01"), "MMMM yyyy") : "No later months"}
                 shortcut={nextMonthKey ? "→" : undefined}
               >
@@ -231,9 +232,9 @@ export default function TeamBreakdown({ employees, dates, selectedDept }: Props)
                 >
                   <ChevronRight size={15} />
                 </button>
-              </NavTooltip>
+              </Tooltip>
               <span className="mx-1 h-4 w-px" style={{ background: "var(--border-subtle)" }} />
-              <NavTooltip
+              <Tooltip
                 label={isCurrentMonth ? "You're here" : todayMonthAvailable ? format(parseISO(todayMonthKey + "-01"), "MMMM yyyy") : "No data this month"}
                 shortcut={isCurrentMonth || !todayMonthAvailable ? undefined : "T"}
               >
@@ -251,7 +252,7 @@ export default function TeamBreakdown({ employees, dates, selectedDept }: Props)
                 >
                   This Month
                 </button>
-              </NavTooltip>
+              </Tooltip>
             </div>
           )}
         </div>
@@ -352,33 +353,3 @@ export default function TeamBreakdown({ employees, dates, selectedDept }: Props)
   );
 }
 
-function NavTooltip({ label, shortcut, children }: { label: string; shortcut?: string; children: React.ReactNode }) {
-  return (
-    <span className="group relative inline-flex">
-      {children}
-      <span
-        role="tooltip"
-        className="pointer-events-none opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100 absolute left-1/2 -translate-x-1/2 top-full mt-2 z-30 transition-opacity duration-150"
-      >
-        <span
-          className="flex items-center gap-2 rounded-lg px-2.5 py-2 whitespace-nowrap relative"
-          style={{ background: "#0f172a", color: "#f1f5f9", boxShadow: "0 8px 24px rgba(0,0,0,0.25)" }}
-        >
-          <span className="text-[11px] font-medium">{label}</span>
-          {shortcut && (
-            <kbd
-              className="font-mono text-[10px] font-bold px-1.5 py-0.5 rounded leading-none"
-              style={{ background: "#1e293b", color: "#cbd5e1", border: "1px solid #334155" }}
-            >
-              {shortcut}
-            </kbd>
-          )}
-          <span
-            className="absolute left-1/2 -translate-x-1/2 bottom-full w-2 h-2 rotate-45"
-            style={{ background: "#0f172a", marginBottom: "-4px" }}
-          />
-        </span>
-      </span>
-    </span>
-  );
-}
