@@ -781,19 +781,23 @@ async function processSlackInteraction(payload: SlackPayload) {
     return;
   }
 
-  // 2) RECORD IT FIRST, AND ONLY THEN SAY SO.
+  // 2) START the write and SHOW the confirmation at the same time.
   //
-  //    The old order confirmed before writing, which is how somebody could be
-  //    told "we received your response" over a row that still said Pending —
-  //    and then be nudged about it at 14:00. Writing first makes that state
-  //    unrepresentable rather than merely unlikely: if this throws, no
-  //    confirmation is shown, the Submit button stays where it was, and the
-  //    obvious thing to do (press it again) is also the right one.
+  //    Order here is a three-way trade and both obvious answers are wrong.
   //
-  //    The inverse failure — written, but the confirmation did not render — is
-  //    strictly better: the answer is safe, and a re-submit is an upsert onto
-  //    the same row.
-  await recordAttendance({
+  //    Confirm-then-write (the original) feels instant but can tell somebody
+  //    "we received your response" over a row that still says Pending, and the
+  //    14:00 reminder then nudges them about it. That complaint reaches PnC.
+  //
+  //    Write-then-confirm is honest but puts a database round trip in front of
+  //    the only feedback the person gets, which is a visible pause on every
+  //    submit, every day, for the whole org.
+  //
+  //    So: both at once. The confirmation renders after one round trip, and the
+  //    write is still awaited before this returns, so a failure is caught and
+  //    corrected rather than swallowed. The window where the message is ahead
+  //    of the row is milliseconds, and the handler below closes it out loud.
+  const written = recordAttendance({
     email,
     date,
     status: option.value,
@@ -803,8 +807,29 @@ async function processSlackInteraction(payload: SlackPayload) {
     messageTs: payload.message?.ts,
   });
 
-  // 3) Now the confirmation is a statement of fact rather than a promise.
   await updateSlackMessage(payload, date, option, actionValue);
+
+  // 3) Now make the confirmation true, or take it back.
+  //
+  //    Being told it saved when it did not is the failure this whole system was
+  //    built to stop, so the one case where that can still happen gets an
+  //    explicit correction rather than a silent alert nobody reads.
+  try {
+    await written;
+  } catch (writeError) {
+    const channel = payload.channel?.id;
+    const ts = payload.message?.ts;
+    if (channel && ts) {
+      await chatUpdate(
+        channel, ts,
+        `We could not save your response for ${date}. Please try again.`,
+        [{ type: "section", text: { type: "mrkdwn",
+             text: `:warning: We could not save your response for *${date}*. ` +
+                   `Please pick again and submit. Nothing has been recorded.` } }],
+      );
+    }
+    throw writeError;
+  }
 
   // 4) Slack profile status: today-only, checked inside. Isolated because it is
   //    cosmetic — it must never be the reason an answer is not recorded.

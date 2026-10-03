@@ -70,20 +70,14 @@ Deno.serve(async (req) => {
     const byEmail = new Map(metrics.map((m) => [m.email, m]));
 
     // Working days in the period: the days anybody was actually asked about.
-    const dayset = new Set(
-      (await pg(
-        `attendance?select=day&day=gte.${period.from}&day=lte.${period.to}&limit=100000`,
-      ) as Array<{ day: string }>).map((r) => r.day),
-    );
-    const workingDays = dayset.size;
-
-    // How many Wednesdays the period actually holds. The footnote claims a
-    // person would meet the standard if their WFH days had been Wednesdays, and
-    // that claim is only true if there were enough Wednesdays to move them onto.
-    const wednesdays = [...dayset].filter((d) => {
-      const [y, m, dd] = d.split("-").map(Number);
-      return new Date(y, m - 1, dd).getDay() === 3;
-    }).length;
+    // Counted in SQL, not by fetching rows. PostgREST truncates at 1000
+    // regardless of the limit asked for, which made this report "3 working
+    // days" for a fortnight and, worse, gave the Wednesday count that decides
+    // who the footnote names.
+    const [{ working_days: workingDays, wednesdays }] = await pg("rpc/period_days", {
+      method: "POST",
+      body: JSON.stringify({ p_from: period.from, p_to: period.to }),
+    }) as Array<{ working_days: number; wednesdays: number }>;
 
     const capRow = await pg("settings?select=value&key=eq.wfa_annual_cap") as Array<{ value: number }>;
     const wfaCap = Number(capRow?.[0]?.value ?? 15);

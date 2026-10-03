@@ -38,15 +38,38 @@ type Recipient = {
   slack_user_id: string | null;
 };
 
-Deno.serve(async () => {
+Deno.serve(async (req) => {
   const started = Date.now();
   const day = istToday();
   const fn = "mission-hq-prompt";
 
+  // `{"only":"someone@example.com"}` sends to exactly one person and bypasses
+  // the business-day gate. It exists so the send loop can be proved against a
+  // real Slack account before a morning where nothing else will send if it is
+  // broken — every other part of this path is exercised by a run that finds
+  // nobody to message, but the loop itself is not.
+  //
+  // It still writes a real attendance row, because a test that skips the write
+  // does not test the thing most likely to be wrong.
+  let only = "";
+  try { only = ((await req.json()) as { only?: string }).only || ""; } catch { /* cron sends {} */ }
+
   try {
-    const recipients = await pg(
-      "prompt_recipients?select=email,full_name,slack_user_id&order=email",
-    ) as Recipient[];
+    const recipients = only
+      ? await pg(
+          "employees?select=email,full_name&email=eq." + encodeURIComponent(only),
+        ).then(async (rows) => {
+          const e = (rows as Array<{ email: string; full_name: string }>)[0];
+          if (!e) return [];
+          const link = await pg(
+            "identity_links?select=slack_user_id&email=eq." + encodeURIComponent(only),
+            { profile: "public" },
+          ) as Array<{ slack_user_id: string }>;
+          return [{ ...e, slack_user_id: link?.[0]?.slack_user_id ?? null }];
+        }) as Recipient[]
+      : await pg(
+          "prompt_recipients?select=email,full_name,slack_user_id&order=email",
+        ) as Recipient[];
 
     if (recipients.length === 0) {
       // Weekend, holiday, or everybody already has a row. All three are silence.
