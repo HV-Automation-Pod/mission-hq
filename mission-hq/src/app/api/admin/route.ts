@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getViewer } from "@/lib/session";
-import { getAdmins, getTriage, getJobs, getPeople, getGroups } from "@/lib/admin-queries";
+import { getAdmins, getTriage, getJobs, getPeople, getGroups, getSlackSyncedAt } from "@/lib/admin-queries";
 
 /**
  * Everything the Admin tab draws, in one request.
@@ -21,11 +21,11 @@ export async function GET() {
   }
 
   try {
-    const [admins, triage, jobs, people, groups] = await Promise.all([
-      getAdmins(), getTriage(), getJobs(), getPeople(), getGroups(),
+    const [admins, triage, jobs, people, groups, slackSyncedAt] = await Promise.all([
+      getAdmins(), getTriage(), getJobs(), getPeople(), getGroups(), getSlackSyncedAt(),
     ]);
     return NextResponse.json(
-      { admins, triage, jobs, people, groups, viewer },
+      { admins, triage, jobs, people, groups, slackSyncedAt, viewer },
       { headers: { "cache-control": "private, no-store" } },
     );
   } catch (err) {
