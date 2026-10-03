@@ -14,9 +14,9 @@
 //    "Has no Slack account" is NOT the signal, and the difference is the whole
 //    point. A new hire is in Zoho days before they get a Slack account, and
 //    marking them exempt would silence their prompts for ever. Only a positive
-//    `deleted: true` from users.list counts. `public.identity_links` cannot
-//    answer this — it drops deactivated users entirely, so absence there is
-//    ambiguous. This asks Slack directly.
+//    `deleted: true` from users.list counts. This asks Slack directly rather
+//    than inferring it from `public.identity_links`, which only ever tells us
+//    when an account was last SEEN.
 //
 // 2. THE MANAGERS ROSTER. Its membership is the member list of its own Slack
 //    channel, because that is the list somebody actually maintains: people are
@@ -28,7 +28,17 @@ import { slack, alert } from "../_shared/slack.ts";
 
 const MANAGERS_CHANNEL = "C061H34DECA";
 
-type Member = { id: string; deleted?: boolean; is_bot?: boolean; profile?: { email?: string } };
+type Member = {
+  id: string;
+  deleted?: boolean;
+  is_bot?: boolean;
+  /** Multi-channel guest. */
+  is_restricted?: boolean;
+  /** Single-channel guest. */
+  is_ultra_restricted?: boolean;
+  real_name?: string;
+  profile?: { email?: string; real_name?: string; display_name?: string };
+};
 
 /** Whole member list, paginated. Tier 2, so a short pause between pages. */
 async function slackDirectory(token: string): Promise<Member[]> {
@@ -57,9 +67,43 @@ Deno.serve(async () => {
     return Response.json({ ok: false, error: "no bot token" }, { status: 500 });
   }
 
+  // ---- 0. Keep what Slack said -------------------------------------------
+  //
+  // One users.list call already pages the whole workspace below, and until now
+  // everything except `deleted` was discarded. Two questions nothing else can
+  // answer live in this response: whether an account is switched off, and
+  // whether the person is a GUEST. The second has no proxy — guests here hold
+  // @hyperverge.co addresses — so without this they were indistinguishable
+  // from staff in the Slack-vs-Zoho audit.
+  let members: Member[] = [];
+  try {
+    members = await slackDirectory(botToken);
+    const snapshot = members.map((m) => ({
+      id: m.id,
+      email: m.profile?.email ?? null,
+      name: m.profile?.display_name || m.profile?.real_name || m.real_name || null,
+      is_bot: m.is_bot === true,
+      is_guest: m.is_restricted === true || m.is_ultra_restricted === true,
+      deleted: m.deleted === true,
+    }));
+    const counts = await pg("rpc/sync_slack_accounts", {
+      method: "POST",
+      body: JSON.stringify({ p_rows: snapshot }),
+    }) as Array<Record<string, number>>;
+    results.slack_accounts = counts?.[0] ?? { total: snapshot.length };
+  } catch (error) {
+    results.slack_accounts_error = error instanceof Error ? error.message : String(error);
+    // Not fatal to the rest of the run, but the audit and the Managers roster
+    // are now reading a snapshot that is one or more days stale, and that is
+    // invisible from the dashboard unless somebody is told.
+    await alert("Could not refresh the Slack account snapshot",
+      `The Slack vs Zoho audit and the Managers roster are working from the previous ` +
+      `snapshot. Guests and leavers may be stale. ${results.slack_accounts_error}`, fn);
+  }
+
   // ---- 1. Retire people whose Slack account has been switched off ---------
   try {
-    const members = await slackDirectory(botToken);
+    if (!members.length) members = await slackDirectory(botToken);
     const deactivated = new Set(
       members
         .filter((m) => m.deleted === true && !m.is_bot && m.profile?.email)
@@ -125,8 +169,13 @@ Deno.serve(async () => {
     }
     if (!ids.length) throw new Error(`conversations.members: ${lastError || "no members"}`);
 
-    // Emails come from identity_links where possible: free, and an exact join.
-    const links = await pg("identity_links?select=email,slack_user_id&limit=2000", { profile: "public" }) as
+    // Emails come from `mission-hq.slack_active`, not from identity_links
+    // directly. The sync UPSERTS AND NEVER DELETES, so a deactivated account
+    // keeps its row for ever — and a leaver still sitting in the managers
+    // channel would resolve perfectly here and be written straight back onto
+    // the roster, putting them in the fortnightly report at 0%. That is the
+    // exact failure the first half of this job exists to prevent.
+    const links = await pg("slack_active?select=email,slack_user_id&limit=2000") as
       Array<{ email: string; slack_user_id: string }>;
     const byId = new Map(links.filter((l) => l.slack_user_id).map((l) => [l.slack_user_id, l.email]));
 
@@ -144,15 +193,16 @@ Deno.serve(async () => {
     }) as Array<{ added: number; removed: number }>;
 
     // A bot in that channel is expected and says nothing. A PERSON who cannot
-    // be resolved is a missing row in a published ranking, so it is alerted.
-    // Deactivated accounts are gone from identity_links, so some of these are
-    // simply leavers still sitting in the channel.
+    // be resolved is a missing row in a published ranking, so it is alerted —
+    // but now that leavers are filtered out by `slack_active`, most of these
+    // are deliberate exclusions rather than something to chase.
     if (unresolved.length) {
       await alert(
         `${unresolved.length} managers-channel member(s) could not be resolved to an email`,
-        `Slack ids: ${unresolved.join(", ")}\n\nBots are expected here. A person missing from ` +
-        `\`public.identity_links\` is either deactivated or newly joined, and will be absent ` +
-        `from the Managers attendance summary until they appear.`,
+        `Slack ids: ${unresolved.join(", ")}\n\nBots are expected here, and so is anybody ` +
+        `whose Slack account has been deactivated: they are excluded on purpose and have been ` +
+        `dropped from the roster. A NEWLY JOINED manager will also land here until the nightly ` +
+        `Slack sync picks them up, and will be absent from the Managers summary until it does.`,
         fn,
       );
     }

@@ -47,6 +47,7 @@ type JobRow = { jobname: string; schedule: string; active: boolean };
 
 type AdminData = {
   admins: Admin[]; triage: TriageRow[]; jobs: JobRow[]; people: Person[]; groups: Group[];
+  slackSyncedAt: string | null;
   viewer: { email: string; role: string; canEdit: boolean };
 };
 
@@ -125,7 +126,7 @@ export default function AdminPanel() {
       </div>
 
       {section === "access"  && <AccessSection  admins={data.admins} viewer={data.viewer} canEdit={canEdit} reload={load} />}
-      {section === "triage"  && <TriageSection  rows={data.triage} canEdit={canEdit} reload={load} />}
+      {section === "triage"  && <TriageSection  rows={data.triage} syncedAt={data.slackSyncedAt} canEdit={canEdit} reload={load} />}
       {section === "people"  && <PeopleSection  people={data.people} canEdit={canEdit} reload={load} />}
       {section === "rosters" && <RostersSection groups={data.groups} people={data.people} canEdit={canEdit} reload={load} />}
       {section === "jobs"    && <JobsSection    jobs={data.jobs} canEdit={canEdit} />}
@@ -424,8 +425,8 @@ function AccessRow({ admin, isSelf, canEdit, lastEditor, reload }: {
  * Both sides sync themselves daily — Slack at 02:00, Zoho at 06:30 — so the
  * list is a join, not a job. There is nothing to refresh.
  */
-function TriageSection({ rows, canEdit, reload }: {
-  rows: TriageRow[]; canEdit: boolean; reload: () => void;
+function TriageSection({ rows, syncedAt, canEdit, reload }: {
+  rows: TriageRow[]; syncedAt: string | null; canEdit: boolean; reload: () => void;
 }) {
   const [query, setQuery] = useState("");
   const [onlyUndecided, setOnlyUndecided] = useState(false);
@@ -463,7 +464,8 @@ function TriageSection({ rows, canEdit, reload }: {
     <SectionCard
       icon={<GitCompareArrows size={18} />}
       title="Slack accounts with no Zoho record"
-      subtitle="Usually a contractor, an intern, or a live employee whose HR record sits under a different email. Opting someone in is what gets them the daily prompt.">
+      subtitle="Usually a contractor, an intern, or a live employee whose HR record sits under a different email. Opting someone in is what gets them the daily prompt."
+      action={<SyncAge at={syncedAt} />}>
       <div className="grid grid-cols-3 gap-3 mb-4">
         <Stat label="Unmatched" value={pool.length}
           hint={showGuests ? "Active in Slack, absent from Zoho" : "On @hyperverge.co"} />
@@ -1017,5 +1019,36 @@ function JobCard({ job, canEdit }: { job: typeof RUNNABLE[number]; canEdit: bool
           style={{ background: "var(--bg-surface)", color: "var(--text-secondary)" }}>{result}</pre>
       )}
     </div>
+  );
+}
+
+/**
+ * How long ago the Slack directory sync last ran.
+ *
+ * This list drops accounts the sync has stopped seeing, which is how a
+ * deactivated account disappears from it. The flip side is that a STALLED sync
+ * would also make the list shrink, and it would look like good news. Showing
+ * the age means a stall reads as a stall.
+ */
+function SyncAge({ at }: { at: string | null }) {
+  if (!at) return null;
+  const hours = (Date.now() - new Date(at).getTime()) / 3_600_000;
+  const stale = hours > 36;
+  const when = hours < 1 ? "just now"
+    : hours < 24 ? `${Math.round(hours)}h ago`
+    : `${Math.round(hours / 24)}d ago`;
+  return (
+    <Tooltip width={230} side="bottom" label={
+      stale
+        ? `The Slack directory sync last ran ${when}. Until it runs, leavers stay on this list and new joiners are missing from it.`
+        : `Slack directory synced ${when}. Accounts it has stopped seeing are treated as deactivated and left off this list.`}>
+      <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded-lg text-[10px] font-semibold"
+        style={stale
+          ? { background: "rgba(245,158,11,0.12)", color: "#f59e0b" }
+          : { background: "var(--bg-inset)", color: "var(--text-muted)" }}>
+        {stale && <AlertTriangle size={10} />}
+        Slack synced {when}
+      </span>
+    </Tooltip>
   );
 }

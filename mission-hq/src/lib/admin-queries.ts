@@ -117,3 +117,17 @@ export async function getGroups(): Promise<Group[]> {
     roster: (byGroup.get(g.key) ?? []).sort(),
   })) as Group[];
 }
+
+/**
+ * When the nightly Slack sync last wrote anything.
+ *
+ * Every answer derived from `identity_links` is only as fresh as this, and the
+ * Slack-vs-Zoho list now DROPS accounts the sync has stopped seeing — so if the
+ * sync stalls, that list quietly shrinks. Showing the age turns a silent
+ * dependency into a visible one.
+ */
+export async function getSlackSyncedAt(): Promise<string | null> {
+  const { data, error } = await requireDb().rpc("slack_synced_at");
+  if (error) return null;
+  return (data as string | null) ?? null;
+}
