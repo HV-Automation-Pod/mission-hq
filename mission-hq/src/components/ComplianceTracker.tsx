@@ -189,7 +189,7 @@ export default function ComplianceTracker({ analytics, selectedDept, dates }: Pr
                 <Tooltip width={230} side="bottom" label="Weeks where they were in an office every available day. A Wednesday at home counts in full."><span >Weeks Met <SortIcon field="compliantWeeks" /></span></Tooltip>
               </th>
               <th onClick={() => toggleSort("compliance")} className="text-center py-2.5 px-3 font-medium cursor-pointer select-none" style={{ color: "var(--text-secondary)" }}>
-                <Tooltip width={230} side="bottom" label="Share of their weeks that met the policy. Weeks with nothing available — all leave — are left out rather than counted as failures."><span >Rate <SortIcon field="compliance" /></span></Tooltip>
+                <Tooltip width={230} side="bottom" label="Share of their weeks that met the policy. Weeks with nothing available, a week of leave for instance, are left out rather than counted as failures."><span >Rate <SortIcon field="compliance" /></span></Tooltip>
               </th>
               <th className="text-center py-2.5 px-3 w-10"></th>
             </tr>

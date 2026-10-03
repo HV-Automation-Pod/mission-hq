@@ -5,6 +5,20 @@ import type { Config } from "tailwindcss";
  * every element and a new palette is one file to edit.
  */
 export default {
+  /*
+   * The toggle writes `class="dark"` onto <html>, so the `dark:` utilities
+   * must read that class. Tailwind 3 defaults this to "media", which reads
+   * `prefers-color-scheme` instead — two different sources of truth for one
+   * theme.
+   *
+   * The result was a page that could be light and dark at once: the CSS
+   * variables followed the toggle, so cards and the page went white, while
+   * every `dark:` utility followed the operating system and stayed dark. On a
+   * machine set to dark, picking the light theme produced white cards holding
+   * dark status badges, a muddy amber alert banner, and near-black blocks
+   * where an empty day should have been a pale dash.
+   */
+  darkMode: "class",
   content: ["./src/**/*.{ts,tsx}"],
   theme: {
     extend: {

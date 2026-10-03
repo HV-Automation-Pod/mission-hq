@@ -15,6 +15,7 @@ import WeeklyOfficeCompliance from "@/components/WeeklyOfficeCompliance";
 import AdminPanel from "@/components/admin/AdminPanel";
 import LoadingScreen from "@/components/LoadingScreen";
 import Tooltip from "@/components/Tooltip";
+import AccountMenu from "@/components/AccountMenu";
 import {
   MapPin, BarChart3, Users, ShieldCheck, Download, Sun, Moon, TrendingUp,
   RefreshCw, AlertCircle, Clock, AlertTriangle, Search, X, Command,
@@ -121,6 +122,12 @@ export default function Dashboard() {
   // is worth DRAWING, never what is allowed.
   const [viewer, setViewer] = useState<{ email: string; role: string } | null>(null);
   const isAdmin = viewer?.role === "admin";
+  // The payload already carries everyone the viewer may see, and a member's
+  // copy holds exactly their own row, so this needs no extra request.
+  const viewerName = useMemo(
+    () => employees.find((e) => e.email === viewer?.email)?.name ?? null,
+    [employees, viewer],
+  );
   const [activeTab, setActiveTab] = useState<Tab>(() => {
     if (typeof window === "undefined") return "overview";
     const t = new URLSearchParams(window.location.search).get("tab");
@@ -372,6 +379,11 @@ export default function Dashboard() {
               style={{ color: "var(--text-secondary)" }} >
               <Download size={14} /> <span className="hidden sm:inline">Export</span>
             </button></Tooltip>
+
+            {/* Who you are, and the way out. */}
+            <div className="ml-1 pl-1.5" style={{ borderLeft: "1px solid var(--border-subtle)" }}>
+              <AccountMenu viewer={viewer} fullName={viewerName} />
+            </div>
           </div>
         </div>
 

@@ -125,7 +125,7 @@ export default function AdminPanel() {
         </div>
       </div>
 
-      {section === "access"  && <AccessSection  admins={data.admins} viewer={data.viewer} canEdit={canEdit} reload={load} />}
+      {section === "access"  && <AccessSection  admins={data.admins} people={data.people} viewer={data.viewer} canEdit={canEdit} reload={load} />}
       {section === "triage"  && <TriageSection  rows={data.triage} syncedAt={data.slackSyncedAt} canEdit={canEdit} reload={load} />}
       {section === "people"  && <PeopleSection  people={data.people} canEdit={canEdit} reload={load} />}
       {section === "rosters" && <RostersSection groups={data.groups} people={data.people} canEdit={canEdit} reload={load} />}
@@ -274,19 +274,42 @@ function SearchBox({ value, onChange, placeholder }: {
  * is a second step again, because reading 350 people's records and changing
  * them are different powers and most people only need the first.
  */
-function AccessSection({ admins, viewer, canEdit, reload }: {
-  admins: Admin[]; viewer: { email: string }; canEdit: boolean; reload: () => void;
+function AccessSection({ admins, people, viewer, canEdit, reload }: {
+  admins: Admin[]; people: Person[]; viewer: { email: string }; canEdit: boolean; reload: () => void;
 }) {
+  // `dashboard_access` stores an email and nothing else, on purpose: access is
+  // granted to an ACCOUNT, and somebody can hold one without being in the Zoho
+  // feed. The name is looked up for display rather than stored, so it stays
+  // right when HR changes it and degrades to the address when there is none.
+  const nameOf = useMemo(() => {
+    const map = new Map(people.map((p) => [p.email, p.full_name]));
+    return (email: string) => map.get(email) || email.split("@")[0];
+  }, [people]);
   const { run, pending, error, done } = useAction();
   const [email, setEmail] = useState("");
   const [note, setNote] = useState("");
   const [withEdit, setWithEdit] = useState(false);
 
-  const add = () => run(
-    () => grantAdmin(email, withEdit, note),
-    `${email.trim().toLowerCase()} can now ${withEdit ? "view and edit" : "view"}`,
-    () => { setEmail(""); setNote(""); setWithEdit(false); reload(); },
-  );
+  const [outcome, setOutcome] = useState<string | null>(null);
+
+  const add = () => {
+    const target = email.trim().toLowerCase();
+    setOutcome(null);
+    run(
+      async () => {
+        const result = await grantAdmin(target, withEdit, note);
+        // Granted and told, granted and not told, and not granted are three
+        // different things. The second one used to look exactly like the first.
+        setOutcome(
+          result?.notified
+            ? `${target} can now ${withEdit ? "view and edit" : "view"}, and has been sent a Slack message.`
+            : `${target} can now ${withEdit ? "view and edit" : "view"}. We could not message them on Slack: ${result?.reason ?? "unknown reason"}. Tell them yourself.`,
+        );
+      },
+      "Saved",
+      () => { setEmail(""); setNote(""); setWithEdit(false); reload(); },
+    );
+  };
 
   const editors = admins.filter((a) => a.can_edit).length;
 
@@ -316,18 +339,29 @@ function AccessSection({ admins, viewer, canEdit, reload }: {
             {pending ? <Loader2 size={11} className="animate-spin" /> : <Plus size={11} />} Grant
           </Btn>
         </div>
-        <Feedback error={error} done={done} />
+        <Feedback error={error} done={outcome ? null : done} />
+        {outcome && !error && (
+          <div className="flex items-start gap-1.5 text-[11px] font-medium mt-2"
+            style={{ color: outcome.includes("could not message") ? "#f59e0b" : "#10b981" }}>
+            {outcome.includes("could not message")
+              ? <AlertTriangle size={11} className="mt-0.5 flex-shrink-0" />
+              : <CheckCircle2 size={11} className="mt-0.5 flex-shrink-0" />}
+            <span>{outcome}</span>
+          </div>
+        )}
         <p className="text-[10px] mt-2.5" style={{ color: "var(--text-muted)" }}>
           Leave &ldquo;Can edit&rdquo; off for someone who needs to read the data. Editing changes attendance records,
-          exemptions and rosters, and the last remaining editor cannot be removed.
+          exemptions and rosters, and the last remaining editor cannot be removed. Whoever you add gets a Slack
+          message telling them what they can now do.
         </p>
       </div>
 
       {admins.length === 0 ? <Empty>Nobody has admin access yet.</Empty> : (
         <TableShell head={<><Th>Person</Th><Th>Access</Th><Th className="hidden md:table-cell">Note</Th><Th className="hidden lg:table-cell">Granted by</Th><Th className="w-10" /></>}>
           {admins.map((a) => (
-            <AccessRow key={a.email} admin={a} isSelf={a.email === viewer.email}
-              canEdit={canEdit} lastEditor={a.can_edit && editors <= 1} reload={reload} />
+            <AccessRow key={a.email} admin={a} name={nameOf(a.email)} isSelf={a.email === viewer.email}
+              canEdit={canEdit} lastEditor={a.can_edit && editors <= 1} reload={reload}
+              grantedBy={a.added_by ? nameOf(a.added_by) : null} />
           ))}
         </TableShell>
       )}
@@ -335,8 +369,9 @@ function AccessSection({ admins, viewer, canEdit, reload }: {
   );
 }
 
-function AccessRow({ admin, isSelf, canEdit, lastEditor, reload }: {
-  admin: Admin; isSelf: boolean; canEdit: boolean; lastEditor: boolean; reload: () => void;
+function AccessRow({ admin, name, grantedBy, isSelf, canEdit, lastEditor, reload }: {
+  admin: Admin; name: string; grantedBy: string | null;
+  isSelf: boolean; canEdit: boolean; lastEditor: boolean; reload: () => void;
 }) {
   const { run, pending, error } = useAction();
   const [confirming, setConfirming] = useState(false);
@@ -354,10 +389,10 @@ function AccessRow({ admin, isSelf, canEdit, lastEditor, reload }: {
     <Row>
       <td className="py-2.5 px-3">
         <div className="flex items-center gap-2.5">
-          <Avatar name={admin.email} />
+          <Avatar name={name} />
           <div>
             <div className="font-medium text-[13px] flex items-center gap-1.5" style={{ color: "var(--text-primary)" }}>
-              {admin.email.split("@")[0]}
+              {name}
               {isSelf && <span className="text-[9px] px-1.5 py-0.5 rounded font-semibold"
                 style={{ background: "var(--accent-light)", color: "var(--accent)" }}>you</span>}
             </div>
@@ -388,7 +423,7 @@ function AccessRow({ admin, isSelf, canEdit, lastEditor, reload }: {
         {admin.note || <span style={{ color: "var(--text-faint)" }}>&mdash;</span>}
       </td>
       <td className="py-2.5 px-3 hidden lg:table-cell text-[11px]" style={{ color: "var(--text-muted)" }}>
-        {admin.added_by ? admin.added_by.split("@")[0] : <span style={{ color: "var(--text-faint)" }}>&mdash;</span>}
+        {grantedBy ?? <span style={{ color: "var(--text-faint)" }}>&mdash;</span>}
       </td>
       <td className="py-2.5 px-3 text-right">
         {confirming ? (
@@ -430,21 +465,20 @@ function TriageSection({ rows, syncedAt, canEdit, reload }: {
 }) {
   const [query, setQuery] = useState("");
   const [onlyUndecided, setOnlyUndecided] = useState(false);
-  const [showGuests, setShowGuests] = useState(false);
-
   /*
-   * Guests are hidden by default, and that is the difference between a list
-   * somebody works through and a list somebody ignores.
+   * No domain filter here any more, deliberately.
    *
-   * The Slack workspace carries 106 accounts on vendor and client domains
-   * against 27 on @hyperverge.co. Every one of the 106 is correctly absent
-   * from the Zoho org tree and always will be, so counting them as "undecided"
-   * buries the two dozen rows that are a genuine question behind a hundred
-   * that never were.
+   * This screen briefly hid anything not on @hyperverge.co, because the list
+   * was 133 rows of which most were vendors. But the domain was never the
+   * signal: Slack guests hold company addresses too, so that filter let them
+   * through while being capable of hiding a genuine contractor who is a full
+   * workspace member on an external domain.
+   *
+   * `mission-hq.slack_accounts` now carries Slack's own flags, and the view
+   * excludes bots, guests and deactivated accounts before the data gets here.
+   * That took the list from 133 rows to 12, every one of them a real question.
    */
-  const staff = useMemo(() => rows.filter((r) => r.email.toLowerCase().endsWith("@hyperverge.co")), [rows]);
-  const guests = rows.length - staff.length;
-  const pool = showGuests ? rows : staff;
+  const pool = rows;
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -464,11 +498,10 @@ function TriageSection({ rows, syncedAt, canEdit, reload }: {
     <SectionCard
       icon={<GitCompareArrows size={18} />}
       title="Slack accounts with no Zoho record"
-      subtitle="Usually a contractor, an intern, or a live employee whose HR record sits under a different email. Opting someone in is what gets them the daily prompt."
+      subtitle="Bots, guests and deactivated accounts are already excluded, so what is left is a real question: usually a contractor, an intern, or a live employee whose HR record sits under a different email. Opting someone in is what gets them the daily prompt."
       action={<SyncAge at={syncedAt} />}>
       <div className="grid grid-cols-3 gap-3 mb-4">
-        <Stat label="Unmatched" value={pool.length}
-          hint={showGuests ? "Active in Slack, absent from Zoho" : "On @hyperverge.co"} />
+        <Stat label="Unmatched" value={pool.length} hint="Active in Slack, absent from Zoho" />
         <Stat label="Prompted anyway" value={optedIn} hint="Someone decided they are staff" tone="emerald" />
         <Stat label="Undecided" value={undecided} hint="Nobody has ruled on these yet" tone={undecided > 0 ? "amber" : undefined} />
       </div>
@@ -481,17 +514,6 @@ function TriageSection({ rows, syncedAt, canEdit, reload }: {
             className="accent-[var(--accent)]" />
           Only undecided
         </label>
-        {guests > 0 && (
-          <Tooltip width={230} side="bottom"
-            label="Vendor and client accounts in the Slack workspace. They are correctly absent from Zoho and always will be.">
-            <label className="flex items-center gap-1.5 text-[11px] font-medium cursor-pointer select-none"
-              style={{ color: "var(--text-secondary)" }}>
-              <input type="checkbox" checked={showGuests} onChange={(e) => setShowGuests(e.target.checked)}
-                className="accent-[var(--accent)]" />
-              Include {guests} guest accounts
-            </label>
-          </Tooltip>
-        )}
       </div>
 
       {filtered.length === 0 ? (
@@ -859,7 +881,7 @@ function GroupCard({ group, people, canEdit, reload }: {
                   const p = byEmail.get(email);
                   return (
                     <Tooltip key={email} width={p ? undefined : 200}
-                      label={p ? email : `${email} — not in the employee list, so this row scores nothing`}>
+                      label={p ? email : `${email} (not in the employee list, so this row scores nothing)`}>
                       <span className="inline-flex items-center gap-1.5 px-2 py-1 text-[11px] rounded-md border"
                         style={{ background: "var(--bg-inset)", borderColor: "var(--border-subtle)", color: "var(--text-secondary)" }}>
                         {p?.full_name || email.split("@")[0]}
@@ -878,7 +900,7 @@ function GroupCard({ group, people, canEdit, reload }: {
 
               {canEdit && (
                 <div className="relative mb-3 max-w-md">
-                  <Field value={add} onChange={setAdd} placeholder="Add somebody — type a name or email" />
+                  <Field value={add} onChange={setAdd} placeholder="Add somebody by name or email" />
                   {suggestions.length > 0 && (
                     <div className="absolute z-20 mt-1 w-full rounded-lg border overflow-hidden"
                       style={{ background: "var(--bg-surface)", borderColor: "var(--border-default)", boxShadow: "var(--shadow-lg)" }}>
@@ -906,7 +928,7 @@ function GroupCard({ group, people, canEdit, reload }: {
                 {dirty && <Btn onClick={() => setDraft(group.roster)}>Discard changes</Btn>}
                 {group.key === "managers" && (
                   <span className="text-[10px]" style={{ color: "var(--text-muted)" }}>
-                    Rebuilt from the Slack channel nightly — run <strong style={{ color: "var(--text-secondary)" }}>Directory sync</strong> under Jobs to refresh it now.
+                    Rebuilt from the Slack channel nightly. Run <strong style={{ color: "var(--text-secondary)" }}>Directory sync</strong> under Jobs to refresh it now.
                   </span>
                 )}
               </div>
