@@ -9,3 +9,5 @@ todo.md
 
 # Supabase CLI local state
 **/supabase/.temp/
+.vercel
+.env*
