@@ -18,6 +18,7 @@
 // closes the seconds-wide gap between selecting the list and working through it.
 // ===========================================================================
 import { pg, istToday } from "../_shared/pg.ts";
+import { denyUnlessScheduler } from "../_shared/auth.ts";
 import { slack, alert } from "../_shared/slack.ts";
 
 const CONCURRENCY = 8;
@@ -29,7 +30,11 @@ type Pending = {
   message_ts: string;
 };
 
-Deno.serve(async () => {
+Deno.serve(async (request) => {
+  // Scheduled job, not a public endpoint. See _shared/auth.ts.
+  const denied = await denyUnlessScheduler(request);
+  if (denied) return denied;
+
   const day = istToday();
   const fn = "mission-hq-remind";
 

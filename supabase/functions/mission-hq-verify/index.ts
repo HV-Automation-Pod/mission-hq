@@ -17,11 +17,16 @@
 // past with the rest.
 // ===========================================================================
 import { pg, istToday } from "../_shared/pg.ts";
+import { denyUnlessScheduler } from "../_shared/auth.ts";
 import { alert } from "../_shared/slack.ts";
 
 type Gap = { email: string; full_name: string | null; slack_user_id: string | null };
 
-Deno.serve(async () => {
+Deno.serve(async (request) => {
+  // Scheduled job, not a public endpoint. See _shared/auth.ts.
+  const denied = await denyUnlessScheduler(request);
+  if (denied) return denied;
+
   const day = istToday();
   const fn = "mission-hq-verify";
 

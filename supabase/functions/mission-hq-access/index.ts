@@ -13,6 +13,7 @@
 // caller surfaces the reason rather than rolling anything back.
 // ===========================================================================
 import { pg } from "../_shared/pg.ts";
+import { denyUnlessScheduler } from "../_shared/auth.ts";
 import { slack } from "../_shared/slack.ts";
 
 type Body = {
@@ -25,6 +26,10 @@ type Body = {
 };
 
 Deno.serve(async (request) => {
+  // Scheduled job, not a public endpoint. See _shared/auth.ts.
+  const denied = await denyUnlessScheduler(request);
+  if (denied) return denied;
+
   const token = Deno.env.get("MISSION_HQ_SLACK_BOT_TOKEN");
   if (!token) return Response.json({ ok: false, reason: "no bot token" }, { status: 500 });
 

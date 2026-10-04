@@ -1,2 +1,42 @@
+# verify_jwt is OFF for every function here, and that is a deliberate choice
+# rather than a shortcut.
+#
+# The gateway's JWT check asks "is this a JWT this project signed". The anon key
+# is one, and it ships to every browser, so the check admits the public. It
+# proves the caller has read a public value, not who they are.
+#
+# Each function below instead calls `denyUnlessScheduler()` (see
+# `_shared/auth.ts`), which compares the bearer against `settings.edge_invoke_key`
+# — a random token readable only by the service role. That is strictly stronger
+# than the gateway check it replaces, and it is what pg_cron presents.
+#
+# `mission-hq` is the exception that proves the rule: it is a Slack webhook,
+# Slack does not send Supabase JWTs or our token, and its authenticity check is
+# the request signature.
+
 [functions.mission-hq]
+verify_jwt = false
+
+[functions.mission-hq-prompt]
+verify_jwt = false
+
+[functions.mission-hq-verify]
+verify_jwt = false
+
+[functions.mission-hq-remind]
+verify_jwt = false
+
+[functions.mission-hq-leave]
+verify_jwt = false
+
+[functions.mission-hq-zoho-push]
+verify_jwt = false
+
+[functions.mission-hq-summary]
+verify_jwt = false
+
+[functions.mission-hq-directory]
+verify_jwt = false
+
+[functions.mission-hq-access]
 verify_jwt = false

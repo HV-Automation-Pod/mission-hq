@@ -22,6 +22,7 @@
 // the fact.
 // ===========================================================================
 import { pg, istToday } from "../_shared/pg.ts";
+import { denyUnlessScheduler } from "../_shared/auth.ts";
 import { slack, alert } from "../_shared/slack.ts";
 
 // Leaves headroom under the platform's wall clock for the final writes.
@@ -39,6 +40,10 @@ type Recipient = {
 };
 
 Deno.serve(async (req) => {
+  // Scheduled job, not a public endpoint. See _shared/auth.ts.
+  const denied = await denyUnlessScheduler(req);
+  if (denied) return denied;
+
   const started = Date.now();
   const day = istToday();
   const fn = "mission-hq-prompt";
