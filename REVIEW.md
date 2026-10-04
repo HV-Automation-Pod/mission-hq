@@ -204,6 +204,7 @@ on one screen and 100% on the other.
 | 31 | **Three things ship separately and none implies the others**: the migration (SQL editor or CLI), the edge function (`supabase functions deploy <fn> --project-ref <ref>`), and the dashboard (Vercel, on push). A report saying "deployed" must say *which*. |
 | 32 | **A changed Supabase secret needs a function redeploy.** Setting the secret alone does nothing. |
 | 33 | **Verify against the live URL, not the logs.** An unauthenticated request to production is the quickest proof of what it actually runs (§4.0). |
+| 33a | **A scheduled job is not verified until a TICK has landed.** `cron.job` says what is scheduled and shows green whether or not it works; `cron.job_run_details` says what happened. That gap hid a dead cycle for its entire life. The name is on `cron.job` and the outcome on `cron.job_run_details`, so it is a join on `jobid` — `job_run_details` has no `jobname` column. And `status = 'succeeded'` means the HTTP POST was dispatched, not that the function did anything: `net.http_post` is asynchronous, so the function's own outcome is in the alert channel or `net._http_response`. |
 | 34 | **A migration that adds a column the client reads must ship before the client that reads it**, or be written to degrade. The client-side WFA allowance does this: absent `wfaCap`, it scores WFA as fully neutral rather than breaking. |
 | 35 | **A new dashboard env var goes in `.env.example` with a comment** and must be set in Vercel. `.env*` is git-ignored; `.env.example` is the source of truth for what is required. |
 
