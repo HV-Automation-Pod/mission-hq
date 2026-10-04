@@ -23,7 +23,14 @@ export function useAction() {
     setDone(null);
     startTransition(async () => {
       try {
-        await fn();
+        // Server actions RETURN their failures rather than throwing them: a
+        // thrown one is replaced by a generic string before it reaches the
+        // browser, so the message never arrives. See `attempt()` in actions.ts.
+        const result = await fn() as { ok?: boolean; error?: string } | undefined;
+        if (result && result.ok === false) {
+          setError(result.error || "Something went wrong");
+          return;
+        }
         setDone(message);
         after?.();
         setTimeout(() => setDone(null), 2500);
