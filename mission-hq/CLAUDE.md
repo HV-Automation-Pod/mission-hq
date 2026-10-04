@@ -2,10 +2,23 @@
 
 ## Project Overview
 
-MissionHQ is an employee location/attendance tracking system for HyperVerge. It has two parts:
+MissionHQ is an employee location/attendance tracking system for HyperVerge.
 
-1. **`mission-hq-app-script/`** — Google Apps Script backend (deployed as web app)
-2. **`mission-hq/`** — Next.js 16 dashboard frontend (TypeScript, Tailwind CSS, Recharts)
+**It runs on Supabase now.** The Google Sheet and the Apps Script that drove it
+have been replaced by Postgres, pg_cron and Edge Functions in the **WeCare**
+project (`jsehiivvzalvcrlybmlf`, schema `"mission-hq"`, quoted — the hyphen is
+not optional).
+
+1. **`supabase/migrations/`** — the schema. 44 migrations.
+2. **`supabase/functions/`** — 9 Edge Functions. Eight are scheduled by pg_cron;
+   `mission-hq` is the Slack webhook.
+3. **`mission-hq/`** — Next.js 16 dashboard (TypeScript, Tailwind, Recharts),
+   with authentication and an admin surface.
+4. **`mission-hq-app-script/`** — LEGACY. Two functions still live here
+   (`syncEmployeesFromZohoOrgTree`, `syncYesterdayAttendanceToZoho`), and the
+   project must stay alive because `WorkCalendar.js` is published as a library
+   that two other repos read at HEAD. **Everything below describing Apps Script
+   as the backend is historical.** Do not apply it to new work.
 
 ## Architecture
 
@@ -104,20 +117,105 @@ Holidays are:
 
 ## Key Concepts
 
-- **4-Day Office Compliance**: Employees should work from office 4 days/week. "Office" includes Office + Client Location + Split Day statuses.
-- **Statuses**: Office, Home, Client Location, Split Day, Travel, Leave, Pending
-- **Daily Flow**: Morning trigger sends Slack DM with location dropdown → user selects → `doPost` updates sheet + Slack profile status → reminder sent to Pending users later
-- **`updateNamesFromSlack()`** in `UpdateData.js:385` — fills in missing Full Name column using Slack API for rows that have email but no name
+- **The compliance rule is NOT "4 office days a week".** It is
+  `adherent / available`, where adherent = office days + WFH that fell on a
+  **Wednesday**, and available = prompted - leave - WFA within the annual cap.
+  Wednesday is the default WFH day, so four office days plus a Wednesday at home
+  is **100%, not 80%**. `src/lib/policy.ts` is a deliberate mirror of the SQL
+  function `member_metrics()`; a change to either must land in both.
+- **Three attendance states, not two.** No row = nobody asked (leaves the
+  denominator). `'Pending'` = asked and ignored (stays in it). A status =
+  answered. Conflating the first two is the bug that has done the most damage
+  here.
+- **Statuses**: Office, Home, Client Location, Split Day, Travel, Leave,
+  Anywhere, Compensatory WFH, Office + Client, Half Day Office Leave, Half Day
+  WFH Leave, Pending. Weights live in the `locations` table and every status's
+  weights sum to 1, so counters are fractional.
+- **Daily flow (IST)**: 08:30 directory sync, 08:50 Zoho leave, 09:00 prompts,
+  10:00 verification, 13:50 leave again, 14:00 reminders, 19:30 Zoho push.
+  Monday to Friday. The summary runs daily at 10:10 and only acts on the 1st
+  and the 16th.
 
 ## Known Issues / Notes
 
-- Hardcoded Slack tokens in `Code.js` and `Structured.js` — should be moved to Script Properties
+**Current (Supabase):**
+
+- `DAY_WEIGHTS` in `src/lib/policy.ts` is a hardcoded copy of the `locations`
+  table. Correct today; it drifts the day somebody adds a status.
+- A prompt whose row was written but whose DM failed is invisible to the
+  verifier, so "re-running the prompt picks them up" is not true for that
+  cohort.
+- The eight scheduled functions gate on `settings.edge_invoke_key`, a random
+  token. `verify_jwt` is off for all of them on purpose: it only asks "is this
+  a JWT this project signed", and the anon key is one, so it admits the public.
+- A scheduled job showing `active` in `cron.job` proves nothing. `cron.job`
+  says what is scheduled; `cron.job_run_details` says what happened, and the
+  two disagreed for the entire life of a dead cron cycle.
+
+**Legacy (Apps Script, historical):**
+
+- Hardcoded Slack tokens in `Code.js` and `Structured.js`
 - `doPost` has no Slack request signature verification
 - Web app access is `ANYONE_ANONYMOUS` with no auth
-- `getUserData()` returns string `'Unknown'` on failure instead of null (inconsistent)
-- Sheet name mismatch: `Delete.js` uses "Message Ts", `SlackMessage.js`/`UpdateData.js` use "Messages TS"
-- `processMessagesdaraboina()` in `SlackMessage.js` is a dev artifact function name
-- `Structured.js` uses a different Slack token than the rest of the codebase
+
+## Deployment — every one of these cost a real outage
+
+**The Vercel project is `mission-hq`, NOT `mission-hq-dashboard`.**
+It lives under the `satishb0369s-projects` scope and it owns the production
+domain `mission-hq-dashboard.vercel.app`. The name mismatch is the trap: there
+are two other projects called `mission-hq-dashboard` (one under
+`hyperverge-academy`, one created by accident in the personal scope) and
+NEITHER serves the live site. Environment variables were once added to the
+wrong one of those and nothing changed, because the wrong project has no
+traffic. **Confirm by the domain, not the name:**
+
+```bash
+vercel link --yes --project mission-hq     # from the REPO ROOT, see below
+vercel domains ls                          # must list mission-hq-dashboard.vercel.app
+```
+
+**`vercel link --yes` CREATES a project when the name is not found in scope.**
+It does not fail. That is how the stray empty project came to exist. If a link
+succeeds but `vercel domains ls` and `vercel ls` are both empty, you are linked
+to something new rather than to the real thing.
+
+**Deploy from the REPO ROOT, not from `mission-hq/`.** The project's Root
+Directory setting is `mission-hq`, so Vercel appends it to wherever you deploy
+from. Running `vercel deploy` inside `mission-hq/` makes it look for
+`mission-hq/mission-hq` and fail with "The specified Root Directory does not
+exist".
+
+```bash
+cd <repo root> && vercel deploy --prod --yes
+```
+
+**The three required environment variables.** Without them the middleware
+throws on its non-null assertions and EVERY route returns 500
+`MIDDLEWARE_INVOCATION_FAILED` — not just the ones needing data.
+
+| Variable | Why |
+|---|---|
+| `NEXT_PUBLIC_SUPABASE_URL` | middleware, session, db |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | middleware and the browser auth client |
+| `SUPABASE_SERVICE_ROLE_KEY` | server-only, never `NEXT_PUBLIC_` |
+
+**A `NEXT_PUBLIC_*` variable cannot be stored as a Secret.** It has to be
+inlined at build time, and Vercel defaults anything credential-shaped to
+Secret, so `vercel env add NEXT_PUBLIC_SUPABASE_ANON_KEY` fails with no useful
+message. Pass `--no-sensitive` to force it to Config:
+
+```bash
+vercel env add NEXT_PUBLIC_SUPABASE_ANON_KEY production \
+  --value "$VALUE" --no-sensitive --force
+```
+
+**Merging is not deploying, and deploying is not working.** Verify against the
+live URL every time. A signed-out request must never return data:
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' https://mission-hq-dashboard.vercel.app/api/data
+# 307 (redirect to /login) = correct. 200 = a live disclosure. 500 = env vars missing.
+```
 
 ## Build & Run
 
