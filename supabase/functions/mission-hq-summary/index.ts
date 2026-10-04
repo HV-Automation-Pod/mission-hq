@@ -23,6 +23,7 @@
 // the next one's deltas.
 // ===========================================================================
 import { pg } from "../_shared/pg.ts";
+import { denyUnlessScheduler } from "../_shared/auth.ts";
 import { slack, alert } from "../_shared/slack.ts";
 import { periodFor, type Period } from "./period.ts";
 import { buildMessage, type Member } from "./render.ts";
@@ -37,6 +38,10 @@ type Group = {
 };
 
 Deno.serve(async (req) => {
+  // Scheduled job, not a public endpoint. See _shared/auth.ts.
+  const denied = await denyUnlessScheduler(req);
+  if (denied) return denied;
+
   const fn = "mission-hq-summary";
   let body: { mode?: string; group?: string; period?: Period } = {};
   try { body = await req.json(); } catch { /* cron sends {} */ }

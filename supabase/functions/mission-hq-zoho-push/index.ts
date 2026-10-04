@@ -22,6 +22,7 @@
 // one. The queue excludes rows without an emp_id for exactly this reason.
 // ===========================================================================
 import { pg } from "../_shared/pg.ts";
+import { denyUnlessScheduler } from "../_shared/auth.ts";
 import { alert } from "../_shared/slack.ts";
 import { zohoAccessToken, zohoDomain } from "../_shared/zoho.ts";
 
@@ -47,6 +48,10 @@ type Row = {
 };
 
 Deno.serve(async (req) => {
+  // Scheduled job, not a public endpoint. See _shared/auth.ts.
+  const denied = await denyUnlessScheduler(req);
+  if (denied) return denied;
+
   const fn = "mission-hq-zoho-push";
   let body: { limit?: number; dryRun?: boolean } = {};
   try { body = await req.json(); } catch { /* cron sends {} */ }

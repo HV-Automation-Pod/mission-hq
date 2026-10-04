@@ -24,6 +24,7 @@
 //    spreadsheet and has never refreshed since.
 // ===========================================================================
 import { pg } from "../_shared/pg.ts";
+import { denyUnlessScheduler } from "../_shared/auth.ts";
 import { slack, alert } from "../_shared/slack.ts";
 
 const MANAGERS_CHANNEL = "C061H34DECA";
@@ -54,10 +55,21 @@ async function slackDirectory(token: string): Promise<Member[]> {
     if (!cursor) break;
     await new Promise((r) => setTimeout(r, 1200));
   }
+  // The page cap is a runaway guard, not a size limit, and the caller REPLACES
+  // the whole snapshot with what comes back. Exiting with a cursor still set
+  // means the list is truncated, and replacing a full snapshot with a partial
+  // one would silently drop everybody past the cap out of `slack_active`: off
+  // the Slack-vs-Zoho audit, and out of the Managers roster resolution. At
+  // ~2300 accounts there is room, which is exactly when this is cheap to add.
+  if (cursor) throw new Error("users.list did not finish paging; refusing to replace the snapshot with a truncated list");
   return out;
 }
 
-Deno.serve(async () => {
+Deno.serve(async (request) => {
+  // Scheduled job, not a public endpoint. See _shared/auth.ts.
+  const denied = await denyUnlessScheduler(request);
+  if (denied) return denied;
+
   const fn = "mission-hq-directory";
   const results: Record<string, unknown> = {};
 

@@ -17,6 +17,7 @@
 // being nagged on holiday and then scored for it.
 // ===========================================================================
 import { pg, istToday } from "../_shared/pg.ts";
+import { denyUnlessScheduler } from "../_shared/auth.ts";
 import { alert } from "../_shared/slack.ts";
 import { zohoAccessToken, zohoDomain } from "../_shared/zoho.ts";
 
@@ -84,6 +85,10 @@ async function approvedLeave(day: string, token: string): Promise<LeaveRecord[]>
 }
 
 Deno.serve(async (req) => {
+  // Scheduled job, not a public endpoint. See _shared/auth.ts.
+  const denied = await denyUnlessScheduler(req);
+  if (denied) return denied;
+
   const fn = "mission-hq-leave";
   let body: { day?: string } = {};
   try { body = await req.json(); } catch { /* cron sends {} */ }
