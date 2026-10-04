@@ -297,7 +297,9 @@ function AccessSection({ admins, people, viewer, canEdit, reload }: {
     setOutcome(null);
     run(
       async () => {
-        const result = await grantAdmin(target, withEdit, note);
+        const result = await grantAdmin(target, withEdit, note) as
+          { ok: boolean; error?: string; notified?: boolean; reason?: string };
+        if (!result.ok) throw new Error(result.error || "Could not grant access");
         // Granted and told, granted and not told, and not granted are three
         // different things. The second one used to look exactly like the first.
         setOutcome(
@@ -1010,9 +1012,15 @@ function JobCard({ job, canEdit }: { job: typeof RUNNABLE[number]; canEdit: bool
     setResult(null);
     setConfirming(false);
     run(async () => {
-      const r = await runJob(job.id);
-      setResult(r.ok ? r.body || "Done" : `HTTP ${r.status}: ${r.body}`);
-      if (!r.ok) throw new Error(`The job returned HTTP ${r.status}`);
+      const r = await runJob(job.id) as
+        { ok: boolean; error?: string; status?: number; body?: string };
+      // Two different failures. `ok:false` is the action itself refusing — not
+      // signed in, read-only, unknown job. A `status` outside 2xx is the job
+      // having run and come back unhappy, and its body is the useful part.
+      if (!r.ok) throw new Error(r.error || "Could not run the job");
+      const okStatus = typeof r.status === "number" && r.status >= 200 && r.status < 300;
+      setResult(okStatus ? r.body || "Done" : `HTTP ${r.status}: ${r.body ?? ""}`);
+      if (!okStatus) throw new Error(`The job returned HTTP ${r.status}`);
     }, "Finished");
   };
 
