@@ -63,9 +63,20 @@ begin
 end $$;
 
 -- After this, check what cron has actually been doing. This is the view that
--- would have caught it on day one, and nothing was reading it:
+-- would have caught it on day one, and nothing was reading it.
 --
---   select jobname, status, return_message, start_time
---     from cron.job_run_details
---    where jobname like 'mission-hq%'
---    order by start_time desc limit 20;
+-- The name lives on `cron.job` and the outcome on `cron.job_run_details`, so it
+-- is a join — `job_run_details` has `jobid`, not `jobname`:
+--
+--   select j.jobname, d.status, d.return_message, d.start_time, d.end_time
+--     from cron.job_run_details d
+--     join cron.job j on j.jobid = d.jobid
+--    where j.jobname like 'mission-hq%'
+--    order by d.start_time desc
+--    limit 20;
+--
+-- `status` is 'succeeded' when the HTTP POST was DISPATCHED, which is all this
+-- proves: net.http_post is asynchronous and the function's own outcome is not
+-- recorded here. For that, the alert channel, or:
+--
+--   select * from net._http_response order by created desc limit 20;
