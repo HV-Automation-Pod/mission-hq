@@ -13,7 +13,18 @@ export async function zohoAccessToken(): Promise<string> {
     client_secret: Deno.env.get("MISSION_HQ_ZOHO_CLIENT_SECRET") || "",
     grant_type: "refresh_token",
   });
-  const response = await fetch(`${base}/oauth/v2/token?${params}`, { method: "POST" });
+  // The credentials go in the BODY, not the query string.
+  //
+  // Zoho's own examples put them in the URL and it accepts both, but a query
+  // string is the one part of a request that gets written down: access logs at
+  // every hop, proxy logs, and anything that records a URL for debugging. A
+  // client secret and a non-expiring refresh token are the two worst things to
+  // leave there, and the refresh token is the one that does not rotate.
+  const response = await fetch(`${base}/oauth/v2/token`, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: params,
+  });
   const json = await response.json();
   if (!json.access_token) {
     throw new Error(`zoho token refresh failed: ${JSON.stringify(json).slice(0, 200)}`);
