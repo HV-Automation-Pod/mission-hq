@@ -198,12 +198,22 @@ export async function revokeAdmin(email: string) {
   // the SQL editor, which is the thing this screen exists to avoid.
   if (clean === viewer.email) throw new Error("You cannot remove your own admin access");
 
-  const { count } = await requireDb()
-    .from("dashboard_access")
-    .select("email", { count: "exact", head: true })
-    .eq("can_edit", true);
-  if ((count ?? 0) <= 1) {
-    throw new Error("This is the last administrator who can edit. Add another first.");
+  // Only an EDITOR can be the last editor. The first version of this counted
+  // editors and refused whenever there was one, regardless of whom it was
+  // asked to remove — so with a single editor on the list, no read-only admin
+  // could be taken off at all, and the error said something untrue about them.
+  const { data: target } = await requireDb()
+    .from("dashboard_access").select("can_edit").eq("email", clean).maybeSingle();
+  if (!target) throw new Error("That person does not have admin access");
+
+  if (target.can_edit) {
+    const { count } = await requireDb()
+      .from("dashboard_access")
+      .select("email", { count: "exact", head: true })
+      .eq("can_edit", true);
+    if ((count ?? 0) <= 1) {
+      throw new Error("This is the last administrator who can edit. Add another first.");
+    }
   }
 
   const { error } = await requireDb().from("dashboard_access").delete().eq("email", clean);

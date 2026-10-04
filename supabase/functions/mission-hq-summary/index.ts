@@ -35,6 +35,9 @@ type Group = {
   bot_username: string;
   last_scores: Record<string, number>;
   snapshot_no: number;
+  /** The last period actually posted to this group. The per-group half of the
+   *  double-post guard: written on every successful send, and read before one. */
+  last_period: string | null;
 };
 
 Deno.serve(async (req) => {
@@ -64,7 +67,7 @@ Deno.serve(async (req) => {
     }
 
     const groups = await pg(
-      "summary_groups?select=key,name,channel_id,bot_username,last_scores,snapshot_no" +
+      "summary_groups?select=key,name,channel_id,bot_username,last_scores,snapshot_no,last_period" +
       "&active=is.true&order=sort_order" + (body.group ? `&key=eq.${body.group}` : ""),
     ) as Group[];
 
@@ -93,8 +96,30 @@ Deno.serve(async (req) => {
     const testChannel = Deno.env.get("MISSION_HQ_TEST_CHANNEL_ID") || "";
 
     const results: Array<Record<string, unknown>> = [];
+    const failures: string[] = [];
 
     for (const group of groups) {
+      /*
+       * THE GUARD IS PER GROUP, not per run.
+       *
+       * `summary_last_sent` is written once, after this whole loop, so a run
+       * that failed partway never wrote it — and the next attempt re-posted to
+       * every group that had already succeeded. `summary_groups.last_period`
+       * was already being written on every successful post and never read,
+       * which is exactly the guard this needs.
+       *
+       * Without it: five groups, the third one's channel is gone. Two have
+       * posted. The throw aborts, so three groups never get that fortnight's
+       * report at all — the 17th is neither the 1st nor the 16th, so there is
+       * no second chance — and anybody pressing "Run now" re-posts to the first
+       * two and advances their snapshot_no a second time, which corrupts the
+       * movement column in front of 350 people.
+       */
+      if (real && group.last_period === period.key) {
+        results.push({ group: group.key, skipped: "already sent this period" });
+        continue;
+      }
+
       const emails = (await pg(
         `group_members?select=email&group_key=eq.${group.key}`,
       ) as Array<{ email: string }>).map((r) => r.email);
@@ -174,7 +199,14 @@ Deno.serve(async (req) => {
           : message.blocks,
         unfurl_links: false,
       });
-      if (!posted.ok) throw new Error(`${group.key}: ${posted.error}`);
+      // Recorded, not thrown. A dead channel on one group is not a reason the
+      // other four go unreported, and the run stays retryable the same morning
+      // because `summary_last_sent` below is withheld.
+      if (!posted.ok) {
+        results.push({ group: group.key, error: posted.error || "chat.postMessage failed" });
+        failures.push(`${group.key}: ${posted.error}`);
+        continue;
+      }
 
       if (real) {
         // Only after a real post. Scores keyed by EMAIL so a renamed person
@@ -195,12 +227,29 @@ Deno.serve(async (req) => {
       results.push({ group: group.key, members: ranked.length, channel, ts: posted.ts });
     }
 
-    if (real) {
+    // Only once EVERY group has posted or was already done. Writing it after a
+    // partial run is what made the failure unrecoverable: the guard said the
+    // period was finished while three groups had never been sent anything.
+    if (real && failures.length === 0) {
       await pg("settings?on_conflict=key", {
         method: "POST",
         headers: { prefer: "resolution=merge-duplicates,return=minimal" },
         body: JSON.stringify([{ key: "summary_last_sent", value: period.key }]),
       });
+    }
+
+    if (real && failures.length) {
+      // The run is retryable and nobody would know without this. `ok: false`
+      // so a caller cannot read a partial send as a finished one.
+      await alert(
+        `Fortnightly summary: ${failures.length} group(s) did not post`,
+        `Period ${period.key}. Failed: ${failures.join("; ")}\n\n` +
+        `The groups that DID post are recorded and will be skipped, so running ` +
+        `this again today retries only the ones that failed. Nothing has been ` +
+        `double-posted and the period is not marked sent.`,
+        fn,
+      );
+      return Response.json({ ok: false, due: true, mode, period: period.key, failures, results }, { status: 500 });
     }
 
     return Response.json({ ok: true, due: true, mode, period: period.key, results });
