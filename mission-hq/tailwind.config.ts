@@ -63,13 +63,30 @@ export default {
         sans: ["var(--font-poppins)", "-apple-system", "BlinkMacSystemFont", "Segoe UI", "system-ui", "sans-serif"],
         mono: ["var(--font-mono)", "SF Mono", "Fira Code", "monospace"],
       },
+      /*
+       * The whole scale, not just DEFAULT. These override Tailwind's built-in
+       * steps on purpose: the components were written against this system's
+       * values, so `rounded-lg` ×61 and `rounded-xl` ×18 were drawn expecting
+       * 16px and 20px and were rendering Tailwind's 8px and 12px instead. The
+       * UI was quietly tighter everywhere than it was designed to be.
+       */
       borderRadius: {
+        sm: "var(--radius-sm)",
         DEFAULT: "var(--radius-md)",
+        md: "var(--radius-md)",
+        lg: "var(--radius-lg)",
+        xl: "var(--radius-xl)",
         card: "var(--radius-lg)",
+        full: "var(--radius-full)",
       },
       boxShadow: {
+        xs: "var(--shadow-xs)",
+        sm: "var(--shadow-sm)",
+        DEFAULT: "var(--shadow-sm)",
+        md: "var(--shadow-md)",
+        lg: "var(--shadow-lg)",
+        xl: "var(--shadow-xl)",
         card: "var(--shadow-sm)",
-        "card-lg": "var(--shadow-lg)",
       },
     },
   },

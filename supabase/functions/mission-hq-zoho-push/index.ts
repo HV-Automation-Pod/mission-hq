@@ -98,15 +98,30 @@ Deno.serve(async (req) => {
         return record;
       });
 
-      const url = `${domain}/people/api/attendance/bulkImport?` + new URLSearchParams({
+      // The payload goes in the BODY, not the query string.
+      //
+      // Fifty records encode to about 8.3 KB of URL, against the 8 KB default
+      // that nginx and Apache both ship with. It sat just over the line, which
+      // is the worst place to sit: not a clean failure, an intermittent one.
+      // And the failure mode had no exit — a 414 is not retryable, so the
+      // batch would fail, stay unpushed, and be rebuilt identically the next
+      // evening, for ever.
+      //
+      // A body also keeps a day of attendance out of every access log between
+      // here and Zoho, for the same reason the token refresh moved.
+      const body = new URLSearchParams({
         data: JSON.stringify(records),
         dateFormat: "yyyy-MM-dd HH:mm:ss",
       });
 
       try {
-        const response = await fetch(url, {
+        const response = await fetch(`${domain}/people/api/attendance/bulkImport`, {
           method: "POST",
-          headers: { Authorization: `Zoho-oauthtoken ${token}` },
+          headers: {
+            Authorization: `Zoho-oauthtoken ${token}`,
+            "content-type": "application/x-www-form-urlencoded",
+          },
+          body,
         });
         const text = await response.text();
 
