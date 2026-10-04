@@ -204,17 +204,47 @@ Deno.serve(async (request) => {
       body: JSON.stringify({ p_group: "managers", p_emails: emails }),
     }) as Array<{ added: number; removed: number }>;
 
-    // A bot in that channel is expected and says nothing. A PERSON who cannot
-    // be resolved is a missing row in a published ranking, so it is alerted —
-    // but now that leavers are filtered out by `slack_active`, most of these
-    // are deliberate exclusions rather than something to chase.
-    if (unresolved.length) {
+    // An unresolved id is only worth a human's attention if it is a PERSON.
+    //
+    // The first version of this alerted on the raw count, and the text said
+    // "bots are expected here" while alerting about three of them — Polly,
+    // Notion, and this alert's own sender. It fired on every run, for a
+    // condition that is permanent and correct, into a shared channel. §3.2:
+    // an alert that cannot be acted on trains people to ignore the ones that
+    // can.
+    //
+    // `slack_accounts` can now say which is which, so classify first and alert
+    // only on what is left.
+    const classified = unresolved.length
+      ? await pg(
+          `slack_accounts?select=slack_user_id,display_name,is_bot,is_guest,deleted` +
+          `&slack_user_id=in.(${unresolved.map(encodeURIComponent).join(",")})`,
+        ) as Array<{ slack_user_id: string; display_name: string | null; is_bot: boolean; is_guest: boolean; deleted: boolean }>
+      : [];
+    const accountById = new Map(classified.map((c) => [c.slack_user_id, c]));
+
+    const expected: string[] = [];
+    const unexplained: string[] = [];
+    for (const id of unresolved) {
+      const c = accountById.get(id);
+      // Unknown to the snapshot means newly joined, which IS worth saying:
+      // they are missing from the Managers summary until the sync catches up.
+      if (c && (c.is_bot || c.is_guest || c.deleted)) expected.push(id);
+      else unexplained.push(id);
+    }
+
+    results.managers_unresolved = { expected: expected.length, unexplained: unexplained.length };
+
+    if (unexplained.length) {
       await alert(
-        `${unresolved.length} managers-channel member(s) could not be resolved to an email`,
-        `Slack ids: ${unresolved.join(", ")}\n\nBots are expected here, and so is anybody ` +
-        `whose Slack account has been deactivated: they are excluded on purpose and have been ` +
-        `dropped from the roster. A NEWLY JOINED manager will also land here until the nightly ` +
-        `Slack sync picks them up, and will be absent from the Managers summary until it does.`,
+        `${unexplained.length} managers-channel member(s) could not be resolved to an email`,
+        `Slack ids: ${unexplained.join(", ")}\n\nThese are people, not bots or guests, and they ` +
+        `will be absent from the Managers attendance summary until they resolve. Most likely a ` +
+        `manager who joined since the last nightly Slack sync.` +
+        (expected.length
+          ? `\n\n(${expected.length} other channel member(s) were bots, guests or deactivated ` +
+            `accounts. Those are excluded on purpose and are not a problem.)`
+          : ""),
         fn,
       );
     }
