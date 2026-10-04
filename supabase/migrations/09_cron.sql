@@ -30,18 +30,26 @@ create extension if not exists pg_net;
 -- this schema already has, which needs no special privilege and is readable in
 -- the dashboard when somebody wonders what cron is calling.
 --
--- WHY THE ANON KEY AND NOT THE SERVICE ROLE KEY.
+-- WHAT `edge_invoke_key` HOLDS. Superseded; see migration 44.
 --
--- pg_cron runs inside Postgres, so it sees none of the secrets the platform
--- injects into an edge function — it needs a token of its own just to get past
--- the gateway. But `verify_jwt` only asks "is this a JWT this project signed";
--- it grants nothing. The function's actual authority is the service-role key
--- injected into its own environment, server-side, which never leaves it.
+-- This originally carried the ANON key, on the reasoning that `verify_jwt`
+-- only asks "is this a JWT this project signed" and therefore grants nothing,
+-- so the public key was the safe thing to put in a table.
 --
--- So cron carries the ANON key: the one that already ships to every browser.
--- `mission-hq.settings` is service-role-only, but even if it were not, the
--- difference between a public key sitting there and a key that bypasses RLS on
--- a database shared with WeCare is the entire point.
+-- The first half of that was right and the conclusion was wrong. Because the
+-- gateway check grants nothing, it also PROTECTS nothing: it admits anybody
+-- holding the anon key, which is everybody with a browser. The eight scheduled
+-- functions were open, and `verify_jwt` is now off for all of them precisely
+-- because it was never the control it looked like.
+--
+-- The control is `denyUnlessScheduler()` in `_shared/auth.ts`, which compares
+-- the bearer against this row. So this row is no longer a public key presented
+-- for show — it is THE shared secret, and it must be a random value. It is not
+-- the service-role key either: that one stays in the function's own
+-- environment and never travels in a header.
+--
+-- Rotating it takes effect immediately and needs no redeploy, because both
+-- `invoke_()` and the gate read it at call time.
 -- THESE TWO ROWS ARE SET BY HAND, ONCE, AND ARE NOT IN THIS FILE.
 --
 -- They name the project and carry a key, and neither belongs in version
@@ -51,7 +59,7 @@ create extension if not exists pg_net;
 --
 --   insert into "mission-hq".settings (key, value) values
 --     ('edge_base_url',   '"https://<SUPABASE_PROJECT_REF>.supabase.co"'::jsonb),
---     ('edge_invoke_key', '"<ANON_KEY>"'::jsonb)
+--     ('edge_invoke_key', to_jsonb(encode(gen_random_bytes(32), 'hex')))
 --   on conflict (key) do update set value = excluded.value, updated_at = now();
 --
 -- `invoke_()` raises if either is missing, so a fresh environment fails loudly

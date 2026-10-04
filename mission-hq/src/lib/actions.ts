@@ -154,8 +154,7 @@ export async function grantAdmin(email: string, canEdit: boolean, note?: string)
 async function notifyAccessGranted(email: string, canEdit: boolean, note?: string) {
   const viewer = await getViewer();
   const base = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!base || !key) return { notified: false, reason: "Supabase is not configured" };
+  if (!base) return { notified: false, reason: "Supabase is not configured" };
 
   let dashboardUrl: string | undefined;
   try {
@@ -170,7 +169,7 @@ async function notifyAccessGranted(email: string, canEdit: boolean, note?: strin
   try {
     const response = await fetch(`${base}/functions/v1/mission-hq-access`, {
       method: "POST",
-      headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
+      headers: { authorization: `Bearer ${await invokeToken()}`, "content-type": "application/json" },
       body: JSON.stringify({
         email,
         can_edit: canEdit,
@@ -213,6 +212,28 @@ export async function revokeAdmin(email: string) {
 }
 
 /**
+ * The token the edge functions accept.
+ *
+ * NOT the service-role key, and that distinction cost an outage. The functions
+ * gate on `settings.edge_invoke_key` (see `_shared/auth.ts`), which is a random
+ * value and deliberately not the service-role key — so presenting the latter is
+ * rejected 403 like any other stranger. This file carried on sending the
+ * service-role key after the gate changed, which took out all seven "Run now"
+ * buttons and the access-grant DM at once.
+ *
+ * Read, not cached: rotating the token should take effect without a redeploy,
+ * which is most of the point of keeping it in a table.
+ */
+async function invokeToken(): Promise<string> {
+  const { data, error } = await requireDb()
+    .from("settings").select("value").eq("key", "edge_invoke_key").maybeSingle();
+  if (error) throw new Error(`Could not read the invoke token: ${error.message}`);
+  const token = data?.value as string | undefined;
+  if (!token) throw new Error("settings.edge_invoke_key is not set");
+  return token;
+}
+
+/**
  * Run one of the scheduled jobs now.
  *
  * Allowlisted by NAME rather than taking a URL: this calls an authenticated
@@ -235,12 +256,11 @@ export async function runJob(job: keyof typeof JOBS, body: Record<string, unknow
   if (!fn) throw new Error(`Unknown job: ${job}`);
 
   const base = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!base || !key) throw new Error("Supabase is not configured");
+  if (!base) throw new Error("Supabase is not configured");
 
   const response = await fetch(`${base}/functions/v1/${fn}`, {
     method: "POST",
-    headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
+    headers: { authorization: `Bearer ${await invokeToken()}`, "content-type": "application/json" },
     body: JSON.stringify(body),
   });
   const text = await response.text();
