@@ -270,8 +270,8 @@ export default function Dashboard() {
     { id: "compliance", label: "Compliance", icon: <ShieldCheck size={16} />, badge: alerts.nonCompliant > 0 ? alerts.nonCompliant : undefined },
     { id: "team", label: "Departments", icon: <Users size={16} /> },
     { id: "trends", label: "Trends", icon: <TrendingUp size={16} /> },
-    // Everything PnC used to do by opening the spreadsheet. Hidden from
-    // members, and the API behind it refuses them regardless.
+    // Everything PnC used to do by hand. Hidden from members, and the API
+    // behind it refuses them regardless.
     ...(isAdmin ? [{ id: "admin" as Tab, label: "Admin", icon: <Settings size={16} /> }] : []),
   ];
 

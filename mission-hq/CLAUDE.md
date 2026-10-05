@@ -4,60 +4,146 @@
 
 MissionHQ is an employee location/attendance tracking system for HyperVerge.
 
-**It runs on Supabase now.** The Google Sheet and the Apps Script that drove it
-have been replaced by Postgres, pg_cron and Edge Functions in the **WeCare**
-project (`jsehiivvzalvcrlybmlf`, schema `"mission-hq"`, quoted — the hyphen is
-not optional).
+It runs entirely on Supabase: Postgres, pg_cron and Edge Functions in the
+**WeCare** project, schema `"mission-hq"` — quoted everywhere, the hyphen is
+not optional. The project ref is not written down here because this repo is
+public; `supabase link` reads it from `supabase/.temp/`, and `vercel env pull`
+has it too.
 
 1. **`supabase/migrations/`** — the schema. 44 migrations.
 2. **`supabase/functions/`** — 9 Edge Functions. Eight are scheduled by pg_cron;
    `mission-hq` is the Slack webhook.
 3. **`mission-hq/`** — Next.js 16 dashboard (TypeScript, Tailwind, Recharts),
    with authentication and an admin surface.
-4. **`mission-hq-app-script/`** — LEGACY. Two functions still live here
-   (`syncEmployeesFromZohoOrgTree`, `syncYesterdayAttendanceToZoho`), and the
-   project must stay alive because `WorkCalendar.js` is published as a library
-   that two other repos read at HEAD. **Everything below describing Apps Script
-   as the backend is historical.** Do not apply it to new work.
+
+## Where it lives, and why there
+
+**Project: WeCare**, not Automations. Postgres cannot join across projects, and
+WeCare already maintains, daily and in production, the three hardest inputs:
+
+| Reused from `public` | Refreshed | |
+|---|---|---|
+| `employees` — the Zoho org tree | 06:30 daily | mirrored into `"mission-hq".employees` by a trigger |
+| `identity_links` — `slack_user_id` ↔ email | 02:00 daily | how the prompt knows where to DM |
+| `holidays` — date → name, with an admin screen | weekly | what `is_business_day()` reads |
+
+MissionHQ owns the `mission-hq` schema and writes nothing to `public`. The one
+exception is the mirror trigger **on** `public.employees`, and it **swallows its
+own errors on purpose**: it is an `AFTER` trigger on another product's table, so
+raising would abort WeCare's nightly sync. A stale mirror is a MissionHQ
+problem; a failed sync is everyone's.
+
+**Accepted trade-offs**, knowingly:
+
+- Anyone holding WeCare's service-role key can read attendance — the service
+  role bypasses RLS by design.
+- A destructive migration by the WeCare team lands on MissionHQ's data too.
+- Splitting out later is `pg_dump -n 'mission-hq'` plus re-pointing the
+  functions: hours, not a rewrite. That is why starting here was the cheap
+  direction rather than a trap.
+
+Three schema decisions are load-bearing, and the migration headers explain each
+at length before you change one:
+
+1. **Three states, not two** (see Key Concepts below).
+2. **`exited_at`, not delete.** WeCare's sync deletes leavers; the mirror stamps
+   a date instead, so a departure does not take 40k attendance rows with it, and
+   policy fields survive a rehire for a human to clear.
+3. **`primary key (email, day)`.** It makes a duplicate day unrepresentable and
+   turns "who is pending today" into an index lookup. Most of the failures this
+   system used to have were expressible only because that key did not exist.
+
+## How the data got here
+
+Attendance did not start in Postgres. It lived for over a year in a
+spreadsheet-shaped store: one row per person, one **column per day**, 376 x 346
+cells and growing, with every scheduled job reading the whole grid on every run.
+
+**Why that was left**, and it was not fashion. Every recurring failure traced
+back to the storage itself:
+
+| Symptom | Root cause |
+|---|---|
+| the nightly recovery sweep timing out at row 283 of 375 | every job read the whole grid, against a 6-minute execution cap |
+| two columns for one date, so a day could be written twice | a duplicate day was *expressible* |
+| answers lost after "Thank you for your update!" | the write path was Slack → edge → **HTTP** → another system → one cell |
+| employees marked as leavers while still employed | identity was an email string, matched one way, with no fallback |
+
+`primary key (email, day)` kills the second outright, the upsert in the webhook
+kills the third, `emp_id`-first matching kills the fourth, and an index kills
+the first. The rest of the schema follows from those.
+
+**The history was carried over, not restarted.** 40,029 rows covering
+2025-05-15 → 2026-10-01 were backfilled and verified row-for-row against the
+old store before cutover, which is why `member_metrics()` can report on periods
+that predate the system running now.
+
+### The migration ledger
+
+`supabase/migrations/` is numbered `01`..`44` and **all of it is applied**. The
+schema is the sum of those files, so:
+
+- **Never edit an applied migration.** Add a new one. The file is the record of
+  what actually ran in production, and the review rules in `REVIEW.md` read it
+  as exactly that.
+- The headers in those files are where the reasoning lives, at much greater
+  length than this file. Read the relevant one **before** changing a weight, a
+  state, or a view — several of them narrate the specific incident the rule
+  exists to prevent, including the store that was replaced.
+- `create or replace view` cannot insert a column mid-list (42P16) and
+  `create or replace function` cannot change a return type (42P13). Both need an
+  explicit `drop` first.
+- `delete from <table>` with no `WHERE` is rejected by Supabase's `safeupdate`
+  guard (21000), `security definer` included. Write `where true`.
 
 ## Architecture
 
-### Apps Script (`mission-hq-app-script/`)
+### Edge Functions (`supabase/functions/`)
 
-| File | Purpose |
+| Function | Purpose |
 |------|---------|
-| `Code.js` | Constants (tokens, channel ID, messages, trivia), `doPost` handler, `logToDumpSheet` |
-| `WebApp.js` | `doGet` API — endpoints: `all`, `today`, `daterange`, `departments`, `analytics`, `summary` |
-| `GetData.js` | Reads Locations sheet, Slack `users.lookupByEmail`, `getValueByLocation` |
-| `ProcessData.js` | Main daily flow: `processEmailsAndSendSlackMessage`, `processPendingEmailsAndSendSlackReminder`, `isWeekend`, `isHoliday`, `updateMissionHQLogFromSlackUsers` |
-| `UpdateData.js` | Writes location responses, `updateSlackProfileStatus`, `handleLocationsPayload`, `updateSlackMessage`, `updateNamesFromSlack` |
-| `SlackMessage.js` | `collectEmployeeLocationMessage`, `deleteSlackMessage`, `sendSlackConfirmationMessage` |
-| `SlackData.js` | Fetches Slack channel members into "Slack Users" sheet |
-| `Analytics.js` | `calculateUserStatusCounts`, `updateAnalyticsSheet`, `countValueInEmailRow` |
-| `Delete.js` | Bulk deletes Slack messages from "Message Ts" sheet |
-| `GetAllUsers.js` | Fetches all Slack workspace users into "Users" sheet |
-| `Structured.js` | Fetches Slack thread conversations |
-| `Test.js` | Test fixture for payload parsing |
+| `mission-hq` | The Slack webhook: signature verification, the submit/edit flow, records the answer, immediate Zoho push |
+| `mission-hq-prompt` | 09:00 — drains `prompt_recipients`; writes the row, then DMs, on a bounded worker pool |
+| `mission-hq-verify` | 10:00 — alerts on anything still in `prompt_gaps`, silent otherwise |
+| `mission-hq-remind` | 14:00 — threaded nudge to whoever is still `Pending` |
+| `mission-hq-leave` | 08:50 and 13:50 — approved Zoho People leave into attendance |
+| `mission-hq-zoho-push` | 19:30 — drains `zoho_push_queue` into Zoho's bulk import |
+| `mission-hq-directory` | 08:30 — deactivated Slack accounts, and the Managers roster from its channel |
+| `mission-hq-summary` | 10:10 daily, acts only on the 1st and the 16th |
+| `mission-hq-access` | DMs somebody that they have been granted dashboard access |
 
-### Google Sheets Structure
+`_shared/` holds the four things every function needs: `pg.ts` (PostgREST
+against the `mission-hq` schema), `auth.ts` (`denyUnlessScheduler`), `slack.ts`
+(the API call with 429 retry, and the alert channel) and `zoho-push.ts`.
 
-- **MissionHQ Log** — Main sheet. Columns: Full Name, Email Address, Department, Date, then date columns (YYYY-MM-DD) with statuses
-- **Locations** — Dropdown options with "Locations" and "Value" columns
-- **Messages TS** — Tracks sent message timestamps for deletion
-- **Slack Users** — Channel member list
-- **Analytics** — Aggregated status counts per employee
-- **DUMP** — Debug logging
+### Main tables
+
+| | |
+|---|---|
+| `employees` | email pk, mirrored Zoho fields, `exited_at`, `wfo_exempt`, `prompt_opt_in` |
+| `attendance` | `(email, day)` pk, status, source, `answered_at`, `slack_channel`, `message_ts`, `prompted_at`, `zoho_pushed_at` |
+| `locations` | `value` pk (exactly what Slack sends), `label`, `status` (what we store), day weights |
+| `messages` / `trivia` / `settings` | prompt content and rotation cursors |
+| `dashboard_access` | who is an admin, and whether they may edit |
+
+Three views carry the daily cycle: `prompt_recipients` (who still needs a DM
+today), `prompt_gaps` (who was missed) and `reminder_recipients`.
 
 ### Department Format
 
-Departments are **comma-separated** in the sheet (e.g. "People & Culture, FLG", "Co-Founder, FLG", "FLG"). Both the Apps Script and dashboard parse these into individual departments for filtering and grouping.
+Departments are **comma-separated** in the `department` column (e.g. "People &
+Culture, FLG", "Co-Founder, FLG"). The dashboard parses these into individual
+departments for filtering and grouping, and the summary's column matchers split
+on the comma so one person can belong to two groups.
 
 ### Slack App
 
 - **Name**: HV Attendance Bot
-- **Interactivity URL**: Google Apps Script web app deployment URL
-- Bot sends DMs with location dropdown (static_select), user selects, `doPost` handles the response
-- Bot also sets user Slack profile status (WFH, On Leave, etc.) using user token
+- **Interactivity URL**: the `mission-hq` Edge Function
+- Bot sends DMs with a location dropdown (static_select); Submit is handled by
+  the webhook, which verifies the Slack signature before anything else
+- Bot also sets the user's Slack profile status (WFH, On Leave, etc.) using the
+  user token, today-only, and never over a status somebody set by hand
 - `messages_tab_enabled: true` is REQUIRED for DMs to work
 
 ### Required Slack Scopes
@@ -73,7 +159,7 @@ Next.js 16 app with Turbopack. Key files:
 | File | Purpose |
 |------|---------|
 | `src/app/page.tsx` | Main dashboard — tabs: Overview, Compliance, Departments, Trends |
-| `src/app/api/data/route.ts` | API proxy to Apps Script |
+| `src/app/api/data/route.ts` | `dashboard_payload()`, scoped to the viewer |
 | `src/lib/types.ts` | Types: `Employee` (has `departments: string[]`), `EmployeeAnalytics`, `WeekCompliance` |
 | `src/lib/api.ts` | `fetchAllData()` — fetches and populates `departments` array |
 | `src/lib/utils.ts` | `computeEmployeeAnalytics`, `calculateWeeklyCompliance`, streak calculations |
@@ -101,19 +187,19 @@ Next.js 16 app with Turbopack. Key files:
 2. ComplianceTracker (Overall historical compliance with date range, weeks met, rate)
 3. WeeklyOfficeTrend (Area chart)
 
-## Holidays (2026)
+## Holidays
 
-Both Apps Script and dashboard use year-specific holiday dates:
+**`public.holidays` is the list**, maintained by WeCare with an admin screen of
+its own and refreshed weekly. There is no hand-edited array to update each year,
+which is the point: a stale holiday list is silently wrong, and most Indian
+holidays move every year.
 
-```
-2026-04-03, 2026-05-01, 2026-08-15, 2026-10-02,
-2026-11-01, 2026-11-09, 2026-11-10, 2026-12-25
-```
-
-Holidays are:
-- Skipped by `processEmailsAndSendSlackMessage` and reminder functions (no messages sent)
+`"mission-hq".is_business_day(date)` is the one definition, and it is what
+`prompt_recipients` gates on. So holidays are:
+- Skipped by the prompt and reminder jobs (nobody is asked, and no row is
+  written, so the day never enters anybody's denominator)
 - Shown as amber "Holiday" bars in the DailyTrendChart
-- Excluded from working day counts in WeeklyOfficeCompliance
+- Excluded from working-day counts in WeeklyOfficeCompliance and the summary
 
 ## Key Concepts
 
@@ -138,8 +224,6 @@ Holidays are:
 
 ## Known Issues / Notes
 
-**Current (Supabase):**
-
 - `DAY_WEIGHTS` in `src/lib/policy.ts` is a hardcoded copy of the `locations`
   table. Correct today; it drifts the day somebody adds a status.
 - A prompt whose row was written but whose DM failed is invisible to the
@@ -151,12 +235,6 @@ Holidays are:
 - A scheduled job showing `active` in `cron.job` proves nothing. `cron.job`
   says what is scheduled; `cron.job_run_details` says what happened, and the
   two disagreed for the entire life of a dead cron cycle.
-
-**Legacy (Apps Script, historical):**
-
-- Hardcoded Slack tokens in `Code.js` and `Structured.js`
-- `doPost` has no Slack request signature verification
-- Web app access is `ANYONE_ANONYMOUS` with no auth
 
 ## Zoho People — how attendance gets there
 

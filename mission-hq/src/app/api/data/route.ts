@@ -10,9 +10,9 @@ import { getViewer } from "@/lib/session";
  * the response: a member's request never loads another person's attendance into
  * this process at all.
  *
- * SAME RESPONSE SHAPE AS BEFORE, deliberately. This used to proxy an Apps
- * Script web app that read a 376 x 346 grid on every call, with a three to four
- * second cold start before any data moved. Keeping the contract means every
+ * SAME RESPONSE SHAPE AS BEFORE, deliberately. This used to proxy a web app
+ * that read a 376 x 346 grid on every call, with a three to four second cold
+ * start before any data moved. Keeping the contract means every
  * tab, chart, streak and heatmap keeps working untouched.
  */
 export const dynamic = "force-dynamic";

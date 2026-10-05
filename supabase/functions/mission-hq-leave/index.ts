@@ -3,7 +3,7 @@
 //
 // WHY IT RUNS FIRST. Without it, somebody on approved leave gets a DM, does not
 // answer it, and lands as `Pending` — which the fortnightly report counts
-// against them, where `Leave` would have been neutral. The Apps Script flow
+// against them, where `Leave` would have been neutral. The previous flow
 // synced leave inside the prompt run for exactly this reason; here it is its
 // own job so a Zoho outage delays nobody's prompt.
 //
@@ -30,7 +30,7 @@ type LeaveRecord = {
 
 /**
  * Zoho returns this payload in at least five shapes depending on the endpoint's
- * mood, and the Apps Script version accumulated a handler for each. They are
+ * mood, and the previous version accumulated a handler for each. They are
  * carried over verbatim rather than trimmed to the one seen today: the cost of
  * a spare branch is nothing, and the cost of guessing wrong is that leave
  * silently stops being applied and people on holiday get scored as Pending.

@@ -1,15 +1,15 @@
 // ===========================================================================
 // Push attendance into Zoho People's muster roll.
 //
-// WHAT CHANGED FROM THE APPS SCRIPT VERSION. That one pushed "yesterday", and
+// WHAT CHANGED FROM THE PREVIOUS VERSION. That one pushed "yesterday", and
 // only yesterday. The confirmation DM keeps its Edit button for ever, so people
 // answer prompts from last week, and the recovery sweep repaired cells days
 // late. None of it ever reached Zoho, so the muster roll quietly disagreed with
-// the sheet and nobody could see why. This pushes whatever is OWED, from
+// our own records and nobody could see why. This pushes whatever is OWED, from
 // `zoho_push_queue`, which covers yesterday and the week-old correction with
 // the same query.
 //
-// CHECK-OUT IS NOT OPTIONAL. The first version of the Apps Script sent check-in
+// CHECK-OUT IS NOT OPTIONAL. The first version of this push sent check-in
 // only. Zoho replied `{"response":"success"}` for all 237 records and the
 // muster roll showed `A` (Absent) with Worked Days = 0, because Zoho derives
 // hours from the pair. An API success on this endpoint does not mean the day

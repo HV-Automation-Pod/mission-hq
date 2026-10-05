@@ -12,13 +12,13 @@ import {
 } from "@/lib/actions";
 
 /*
- * The Admin tab: everything PnC used to do by opening the spreadsheet.
+ * The Admin tab: everything PnC used to do by hand.
  *
- * The sheet was never only a report. It was also an input — somebody typed a
+ * That work was never only reporting. It was also input — somebody typed a
  * reason into a "WFO Exempt" column, flipped a "Send Attendance Prompt?"
  * dropdown, pasted a roster — and those edits drove what the bot did the next
  * morning. Moving the data to Postgres without moving those controls would
- * have left the sheet alive as the only way to operate the system.
+ * have left those hand edits as the only way to operate the system.
  *
  * Read access and write access are separate on purpose. Most people who need
  * this screen need to look at it; `canEdit` gates every control that changes
@@ -454,9 +454,9 @@ function AccessRow({ admin, name, grantedBy, isSelf, canEdit, lastEditor, reload
 /**
  * Active Slack accounts with no Zoho org-tree record.
  *
- * This is the spreadsheet tab that was also an input: somebody read the list,
- * decided a person was a real employee whose HR record sits under a different
- * email, and set "Send Attendance Prompt? = yes". That decision is the only
+ * This list is also an input: somebody reads it, decides a person is a real
+ * employee whose HR record sits under a different email, and sets
+ * "Send Attendance Prompt? = yes". That decision is the only
  * thing that gets a live employee prompted when Zoho has never heard of them.
  *
  * Both sides sync themselves daily — Slack at 02:00, Zoho at 06:30 — so the

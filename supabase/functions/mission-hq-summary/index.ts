@@ -4,10 +4,11 @@
 // SCHEDULED DAILY, FIRES TWICE A MONTH. `periodFor()` returns null on the ~28
 // days that are neither the 1st nor the 16th and the run ends immediately.
 //
-// That is deliberate, and it fixes a bug that has already happened. Apps Script
-// used two monthly triggers, one for each date. In the triggers UI they look
-// like duplicates: same function, same hour, both showing "Last run: -" until
-// one fires. On 2026-09-14 somebody deleted the 16th as a duplicate, two days
+// That is deliberate, and it fixes a bug that has already happened. The system
+// this replaced used two monthly triggers, one for each date. Two triggers like
+// that look like duplicates in any scheduler UI: same function, same hour, both
+// showing no last run until one of them fires. On 2026-09-14 somebody deleted
+// the 16th as a duplicate, two days
 // before it was due, and the first half of that month was never reported. A job
 // that wakes every morning and decides not to fire cannot be deleted by
 // mistake, and a missed day is caught the next morning rather than next month.

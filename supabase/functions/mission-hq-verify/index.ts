@@ -5,7 +5,7 @@
 // the send worked, it is empty and this function says nothing at all. Anything
 // left in it is a person who will be counted as not checked in for a message
 // they never received — which is the failure worth interrupting somebody for,
-// and the one the spreadsheet could never see cheaply.
+// and the one the storage this replaced could never see cheaply.
 //
 // It also catches the sender failing ENTIRELY, with no special case: a cron
 // that never fired leaves every single person in the view, which is simply the
