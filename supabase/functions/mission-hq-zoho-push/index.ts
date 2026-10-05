@@ -22,21 +22,12 @@
 // one. The queue excludes rows without an emp_id for exactly this reason.
 // ===========================================================================
 import { pg } from "../_shared/pg.ts";
+import { owedRows, pushRows } from "../_shared/zoho-push.ts";
 import { denyUnlessScheduler } from "../_shared/auth.ts";
 import { alert } from "../_shared/slack.ts";
-import { zohoAccessToken, zohoDomain } from "../_shared/zoho.ts";
 
-// Bulk Import allows 10 requests per 5-minute lock. Fifty per batch means a
-// full org day is ~5 requests. Do not drop below 25: ten requests at that size
-// already sits on the ceiling.
-const BATCH = 50;
-const PAUSE_MS = 2_000;
-
-// Nominal hours, not real ones. Phase one records presence; hours worked is a
-// later problem.
-const IN_TIME = "09:30:00";
-const OUT_FULL = "18:30:00";
-const OUT_HALF = "13:30:00";
+// The batch size, pacing and nominal hours now live in `_shared/zoho-push.ts`,
+// so the immediate push and this run cannot disagree about them.
 
 type Row = {
   email: string;
@@ -77,77 +68,11 @@ Deno.serve(async (req) => {
       return Response.json({ ok: true, dryRun: true, owed: owed.length, blocked: blocked.length, sample: owed.slice(0, 3) });
     }
 
-    const token = await zohoAccessToken();
-    const domain = zohoDomain();
-
-    let pushed = 0;
-    const failures: string[] = [];
-
-    for (let i = 0; i < owed.length; i += BATCH) {
-      const slice = owed.slice(i, i + BATCH);
-
-      const records = slice.map((r) => {
-        const record: Record<string, string> = {
-          empId: r.emp_id,
-          checkIn: `${r.day} ${IN_TIME}`,
-          // Half a worked day finishes at lunch. Anything else is a full day.
-          checkOut: `${r.day} ${Number(r.day_fraction) < 1 ? OUT_HALF : OUT_FULL}`,
-        };
-        // Optional in Zoho, and omitted rather than sent blank.
-        if (r.site) record.location = r.site;
-        return record;
-      });
-
-      // The payload goes in the BODY, not the query string.
-      //
-      // Fifty records encode to about 8.3 KB of URL, against the 8 KB default
-      // that nginx and Apache both ship with. It sat just over the line, which
-      // is the worst place to sit: not a clean failure, an intermittent one.
-      // And the failure mode had no exit — a 414 is not retryable, so the
-      // batch would fail, stay unpushed, and be rebuilt identically the next
-      // evening, for ever.
-      //
-      // A body also keeps a day of attendance out of every access log between
-      // here and Zoho, for the same reason the token refresh moved.
-      const body = new URLSearchParams({
-        data: JSON.stringify(records),
-        dateFormat: "yyyy-MM-dd HH:mm:ss",
-      });
-
-      try {
-        const response = await fetch(`${domain}/people/api/attendance/bulkImport`, {
-          method: "POST",
-          headers: {
-            Authorization: `Zoho-oauthtoken ${token}`,
-            "content-type": "application/x-www-form-urlencoded",
-          },
-          body,
-        });
-        const text = await response.text();
-
-        // A 200 is not enough: this endpoint returns errors inside a 200 body.
-        let ok = response.ok;
-        if (ok && /"errors"|"status"\s*:\s*1|code"\s*:\s*7200/i.test(text)) ok = false;
-        if (!ok) throw new Error(`HTTP ${response.status} ${text.slice(0, 200)}`);
-
-        // Stamped only after Zoho accepts. A failure leaves the rows owed, so
-        // the next run retries them rather than marking them silently sent.
-        await pg("rpc/mark_zoho_pushed", {
-          method: "POST",
-          body: JSON.stringify({
-            p_rows: slice.map((r) => ({ email: r.email, day: r.day })),
-          }),
-        });
-        pushed += slice.length;
-      } catch (error) {
-        failures.push(
-          `${slice[0].day}..${slice[slice.length - 1].day} (${slice.length} records): ` +
-          (error instanceof Error ? error.message : String(error)),
-        );
-      }
-
-      if (i + BATCH < owed.length) await new Promise((r) => setTimeout(r, PAUSE_MS));
-    }
+    // The batching, the nominal hours, the errors-inside-a-200 check and the
+    // stamp-only-after-acceptance rule all live in `_shared/zoho-push.ts`, so
+    // this run and the immediate push from the Slack submit handler cannot
+    // drift apart on any of them.
+    const { pushed, failures } = await pushRows(owed);
 
     if (failures.length) {
       await alert("Attendance push to Zoho failed for some batches",

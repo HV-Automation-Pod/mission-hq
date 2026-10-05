@@ -1,3 +1,5 @@
+import { alert } from "../_shared/slack.ts";
+import { owedRows, pushRows } from "../_shared/zoho-push.ts";
 const encoder = new TextEncoder();
 
 type SlackPayload = {
@@ -837,6 +839,61 @@ async function processSlackInteraction(payload: SlackPayload) {
     await updateSlackProfileStatus(payload, option, date);
   } catch (statusError) {
     console.error("MissionHQ profile status update failed", statusError);
+  }
+
+  // 5) Tell Zoho now, rather than at 19:30.
+  //
+  //    Every answer used to wait for the nightly batch, a backdated one
+  //    included, so Zoho could be a day behind for today and longer for a
+  //    correction somebody made to last week. Pushing here closes that to
+  //    seconds.
+  //
+  //    THIS CANNOT FAIL THE ANSWER. The row is already saved and the person has
+  //    already been told so; Zoho being slow or down is not their problem and
+  //    must not become their error message. So it is isolated like the profile
+  //    status above, and it is genuinely safe to skip:
+  //
+  //      - `zoho_push_queue` re-offers any row that is not yet stamped, so the
+  //        19:30 run sweeps up whatever this missed,
+  //      - and it re-offers rows edited since their last push, so an answer
+  //        changed after this ran is sent again rather than left stale.
+  //
+  //    The nightly job therefore stays exactly as it was. This is a fast path
+  //    in front of it, not a replacement for it, which is why a failure here is
+  //    worth an alert but not a retry.
+  await pushAnswerToZoho(email, date);
+}
+
+/**
+ * Push one person-day to Zoho, in the background.
+ *
+ * Selects through `zoho_push_queue` rather than building a record here, so the
+ * eligibility rules live in exactly one place: somebody with no Zoho employee
+ * id, a status that is still Pending, or a row the nightly job already sent
+ * simply does not come back, and this does nothing.
+ */
+async function pushAnswerToZoho(email: string, date: string) {
+  try {
+    const rows = await owedRows({ email: email.trim().toLowerCase(), day: date });
+    if (rows.length === 0) return;
+
+    const result = await pushRows(rows);
+    if (result.failures.length) {
+      await alert(
+        "Immediate Zoho push failed for one answer",
+        `${email} on ${date}: ${result.failures.join("; ")}\n\n` +
+        `The answer IS saved. The row stays queued, so the 19:30 run will retry ` +
+        `it; this alert exists so a persistent failure is visible before then.`,
+        "mission-hq",
+      );
+    }
+  } catch (error) {
+    await alert(
+      "Immediate Zoho push failed for one answer",
+      `${email} on ${date}: ${error instanceof Error ? error.message : String(error)}\n\n` +
+      `The answer IS saved and the row stays queued for the 19:30 run.`,
+      "mission-hq",
+    );
   }
 }
 
