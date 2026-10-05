@@ -203,6 +203,52 @@ so Zoho keeps both the attendance record and the leave. Before immediate push
 the 19:30 run would simply have skipped it. Narrow, but it writes to an HR
 system.
 
+### The Zoho backfill, and how to bring it back
+
+A one-off force re-push lived at `supabase/functions/mission-hq-zoho-backfill/`
+and was deleted on 2026-10-05 after it finished. **It is in git, so recreating
+it is a checkout, not a rewrite:**
+
+```bash
+git checkout c12e8f4 -- supabase/functions/mission-hq-zoho-backfill/
+supabase functions deploy mission-hq-zoho-backfill --project-ref <REF> --no-verify-jwt
+node supabase/functions/mission-hq-zoho-backfill/driver.mjs --from YYYY-MM-DD --to YYYY-MM-DD
+```
+
+**WHY IT CANNOT BE THE NORMAL QUEUE, which is the whole reason it exists.**
+`zoho_push_queue` offers a row only while `zoho_pushed_at` is null or older
+than `updated_at`. That is right for running the system and useless for
+repairing it: if our stamp says a day was sent and Zoho does not have it, the
+queue will never offer it again. The backfill ignores the stamp.
+
+That is not hypothetical. Over 2026-09-01..2026-10-05, 5,772 of 5,778 answered
+rows already carried a stamp — the live queue had nothing to do — and Zoho was
+still missing at least one day that our records claimed to have sent. Our own
+2026-09-28 read `Anywhere`, stamped as pushed, and Zoho showed **Absent**,
+while 09-29 with the identical status in the same run showed Present.
+
+**What it does, and the constraints that shaped it:**
+
+- **One day per call.** Zoho allows 10 Bulk Import requests per 5-minute lock
+  and a day of ~230 people is ~5 requests at 50 per batch. One day fits inside
+  a window; two do not.
+- **180s between days** in the driver, and that number is arithmetic: at 180s
+  at most two day-runs fall in any 5-minute window, which is exactly 10. At
+  150s it would be three, which is 15 and over.
+- **No wait when nothing was sent.** A weekend finds no presence rows, makes no
+  request, and consumes none of the lock.
+- **Its own 120s timeout and three attempts.** undici waits 300s for response
+  headers and then throws an *uncaught* TypeError; one slow call killed a run
+  that had already completed 28 days.
+- **Resumable.** Each response carries `nextDay`; a failure stops the loop and
+  prints the `--from` to resume with.
+- It reuses `_shared/zoho-push.ts`, so batching, nominal hours, the half-day
+  rule, errors-inside-a-200 and stamp-after-acceptance are the live ones. There
+  is **no migration** to undo: it reads through PostgREST.
+
+Result of the 2026-10-05 run: 5,310 presence rows re-sent across 09-01..10-05,
+0 left unpushed, 0 blocked.
+
 ## Slack — rate limits
 
 `chat.postMessage` is limited **per channel** at ~1/sec, and every DM is its own
