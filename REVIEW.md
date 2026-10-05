@@ -195,7 +195,9 @@ on one screen and 100% on the other.
 | 27 | **Never remove the signature check, never widen the replay window, never turn the constant-time compare into `===`.** 🔴 each. |
 | 28 | **Errors can arrive inside a 200 body.** Zoho's `bulkImport` does exactly this. Checking only the HTTP status is 🔴. |
 | 29 | **Loops over the org are paced and bounded.** Slack's `chat.postMessage` limit is per-channel, and every DM is its own channel - which is what makes the worker pool safe. A new unpaced call in a whole-org loop will 429 partway and leave the run half-done. |
-| 30 | **A courtesy must not fail the thing it is reporting on.** The access-grant DM is sent after the write and cannot throw; the grant stands if Slack is down, and the reason is returned for the UI to show. |
+| 30 | **A courtesy must not fail the thing it is reporting on.** The access-grant DM is sent after the write and cannot throw; the grant stands if Slack is down, and the reason is returned for the UI to show. The same applies to the immediate Zoho push on submit: the answer is already saved and acknowledged, so a push failure alerts and stops rather than retrying, because the 19:30 sweeper IS the retry. |
+| 30a | **A rate limit is a shared budget, not a per-caller one.** Zoho Bulk Import allows 10 requests per 5-minute lock across the nightly run, every immediate push and any backfill. A new caller of a limited API has to say what else is drawing on the same bucket. |
+| 30b | **A 429 is retried with the server's own `Retry-After`,** bounded. `_shared/slack.ts` does this; a new HTTP client that treats 429 as a plain failure is 🟡, and 🔴 where the dropped call is a prompt somebody then counts as ignored. Check that the comment claiming it matches code that does it — that exact pair was false for weeks. |
 
 ### 3.8 Deployment - a pushed change is not a shipped change
 

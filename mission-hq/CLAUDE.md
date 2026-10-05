@@ -158,6 +158,66 @@ Holidays are:
 - `doPost` has no Slack request signature verification
 - Web app access is `ANYONE_ANONYMOUS` with no auth
 
+## Zoho People — how attendance gets there
+
+**Two paths, and the second is what makes the first safe to do casually.**
+
+1. **On submit, immediately.** The Slack handler pushes that one person-day as
+   soon as somebody answers — today's or a backdated one, no date gate inside
+   the queue's 60-day window. An *edit* pushes on the re-submit, not on the
+   Edit click: that click only reopens the picker and records nothing.
+2. **19:30 nightly, as the sweeper.** `zoho_push_queue` offers any row that is
+   unstamped, or edited since its last push, so it collects whatever the fast
+   path missed.
+
+The immediate push **cannot fail the answer**. The row is saved and the person
+already told before it runs, so a failure alerts and stops — no retry, because
+the retry is the nightly run.
+
+**Never pushed, each for its own reason:**
+
+| | |
+|---|---|
+| `Pending` | not an answer |
+| full `Leave` | Zoho's leave tracker already owns that day; pushing presence makes one half of Zoho contradict the other |
+| no Zoho `emp_id` | ONE such record fails every record batched with it (probed 2026-08-05), so they are excluded and counted as `blocked` |
+| half-days | pushed as **half** — `day_fraction` turns 0.5 into 09:30–13:30 |
+
+**A row is stamped only after Zoho accepts it.** A failure leaves it owed, so
+the next run retries rather than marking it silently sent.
+
+**Bulk Import allows 10 requests per 5-minute lock**, 50 records per batch. A
+full org day is ~5 requests. This is a shared budget: the nightly run, every
+immediate push, and any backfill all draw on it. A burst of submits during a
+backfill can exhaust it, which surfaces as an alert and a row left queued, not
+as data loss.
+
+**Credentials and payload go in the POST body, never the query string.** Fifty
+records exceed the 8 KB URL default that nginx and Apache ship, and a 414 is
+not retryable — the batch would be rebuilt identically every evening for ever.
+
+**Known edge case.** Leave can be approved during the day (`leave-pm`, 13:50).
+Somebody who answers at 09:05 is pushed to Zoho immediately; if leave is then
+approved, the status becomes `Leave` and the queue will not re-offer the row,
+so Zoho keeps both the attendance record and the leave. Before immediate push
+the 19:30 run would simply have skipped it. Narrow, but it writes to an HR
+system.
+
+## Slack — rate limits
+
+`chat.postMessage` is limited **per channel** at ~1/sec, and every DM is its own
+channel, so sending the whole org at once never binds. That is why the prompt
+job uses a bounded worker pool (8 in flight) and finishes 400 sends in under a
+minute, rather than pacing sequentially as if the limit were global.
+
+**A 429 is retried in `_shared/slack.ts`**, using Slack's own `Retry-After`,
+bounded to 3 attempts and 30s. Both shapes are handled: a real HTTP 429, whose
+body is not reliably JSON, and a 200 carrying `ok:false, error:"ratelimited"`.
+
+This matters more than it looks, because the attendance row is written *before*
+the DM: a throttled send leaves somebody with a `Pending` row they never saw,
+which then counts as "asked and ignored" in their denominator.
+
 ## Deployment — every one of these cost a real outage
 
 **The Vercel project is `mission-hq`, NOT `mission-hq-dashboard`.**
