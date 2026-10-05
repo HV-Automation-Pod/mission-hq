@@ -24,7 +24,7 @@ export type TriageRow = {
 };
 
 /**
- * Slack accounts with no Zoho record: the spreadsheet tab, as a live view.
+ * Slack accounts with no Zoho record, as a live view.
  *
  * Both sides are already synced daily — Slack at 02:00, Zoho at 06:30 — so this
  * is a join, not a job. The tab it replaces paged the whole Slack directory on
@@ -68,7 +68,7 @@ export type Person = {
  *
  * The mirrored columns (name, team, location) come back from Zoho on every
  * sync and are read-only here; `wfo_exempt`, `prompt_opt_in` and
- * `location_override` are the ones PnC used to keep in spreadsheet columns.
+ * `location_override` are the ones PnC used to keep by hand.
  */
 export async function getPeople(): Promise<Person[]> {
   const { data, error } = await requireDb()

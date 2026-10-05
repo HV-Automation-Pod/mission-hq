@@ -136,7 +136,7 @@ function parseSubmitDate(actionValue: string) {
 //
 //   submit_location_<date>_<fact> | <url-encoded meta> | <option list JSON>
 //
-// The Apps Script prompt writes the first two. The third is added by the Edit
+// The prompt writes the first two. The third is added by the Edit
 // button only — see packEditValue(). URLSearchParams percent-encodes "|" as
 // %7C, so the separators are never ambiguous.
 function splitActionValue(actionValue: string) {
@@ -158,7 +158,7 @@ function parseSubmitMeta(actionValue: string) {
   meta.email = (params.get("e") || "").trim();
   meta.department = (params.get("d") || "").trim();
   meta.location = (params.get("l") || "").trim();
-  // "s" is added by us, not by the Apps Script prompt: the answer currently on
+  // "s" is added on submit, not by the prompt: the answer currently on
   // record, so the Edit button can pre-select it without having to read it back
   // out of the confirmation text.
   meta.status = (params.get("s") || "").trim();
@@ -181,10 +181,9 @@ const EDIT_VALUE_MAX = 1900;
  * network at all.
  *
  * Rebuilding the picker needs the options, and the confirmation has no select
- * left to read them from — the first version fetched them back from the Apps
- * Script `?action=locations` endpoint, which measured 3.3–4.5s per call (all of
- * it Apps Script cold start, not transport). That delay was the entire cost of
- * clicking Edit.
+ * left to read them from — the first version fetched them back from an external
+ * web app endpoint, which measured 3.3–4.5s per call (all of it that app's cold
+ * start, not transport). That delay was the entire cost of clicking Edit.
  *
  * They are already in the payload at this point — the message being answered
  * still carries its select — so they can just be carried forward instead. Only
@@ -270,12 +269,12 @@ function extractFunFact(payload: SlackPayload) {
 type SlackBlock = Record<string, unknown>;
 type PickerOption = { text: { type: string; text: string }; value: string };
 
-// The Locations sheet, fetched through the Apps Script doGet rather than
-// duplicated here — that sheet is the only place the option list lives, and a
-// second copy would drift the moment someone adds a status.
+// The picker options, read from `mission-hq.locations` rather than duplicated
+// here — that table is the only place the option list lives, and a second copy
+// would drift the moment someone adds a status.
 //
-// Cached per isolate: an Apps Script GET costs a second or two, and the list
-// changes a few times a year at most. A cold isolate just pays it once.
+// Cached per isolate: the list changes a few times a year at most, so a cold
+// isolate pays for one read and nothing after it does.
 let cachedOptions: PickerOption[] | null = null;
 let cachedStatusByValue: Map<string, string> | null = null;
 let cachedOptionsAt = 0;
@@ -285,9 +284,9 @@ const OPTIONS_TTL_MS = 30 * 60 * 1000;
  * The picker options, and the value -> stored-status map, from
  * `mission-hq.locations`.
  *
- * This used to call the Apps Script web app at `?action=locations`, which put an
- * Apps Script cold start on a path a human was waiting on. It is now one indexed
- * read, and the table is the only place the list is defined.
+ * This used to call an external web app endpoint, which put that app's cold
+ * start on a path a human was waiting on. It is now one indexed read, and the
+ * table is the only place the list is defined.
  *
  * `value` is stored EXACTLY as Slack sends it — hyphenated — so nothing here
  * does string surgery on a payload. The single option whose stored form is not
@@ -461,7 +460,7 @@ async function showLocationPicker(payload: SlackPayload, actionValue: string) {
  *
  * Used when Update is clicked but the answer has not changed. The message text
  * already names what is on record, so collapsing is purely a re-render: no
- * sheet write, no Slack profile call, no Apps Script round trip.
+ * write, no Slack profile call, no round trip to the database.
  */
 async function collapseToEdit(payload: SlackPayload, actionValue: string) {
   const channel = payload.channel?.id;
@@ -551,12 +550,10 @@ async function resolveUserEmail(userId: string) {
   return json.ok ? (json.user?.profile?.email || "") : "";
 }
 
-// Forwards a clean, pre-processed record to Apps Script, which only writes the
-// Google Sheet: { email, date, status }.
 /**
- * Posts to #automation-alerts when a response is about to be lost, matching the
- * shape sendErrorAlert() uses in the Apps Script side (SlackAlerts.js) so every
- * HV automation's failures read the same in the channel.
+ * Posts to #automation-alerts when a response is about to be lost, in the same
+ * shape every other HV automation's alerts use, so they all read the same in
+ * the channel.
  *
  * Best effort: alerting must never be the reason a request fails.
  *
@@ -584,9 +581,10 @@ async function alertLostResponse(record: { email: string; date: string; status: 
         text:
           `:rotating_light: *MissionHQ Alert*\n\n` +
           `*Error:* \`Attendance response LOST, and the user was told it was saved: ${reason}\`\n` +
-          `*Function:* \`mission-hq edge function / forwardToAppsScript\`\n` +
+          `*Function:* \`mission-hq edge function / recordAttendance\`\n` +
           `*Details:* \`${record.email}\` on \`${record.date}\` (response \`${record.status}\`). ` +
-          `The sheet still shows \`Pending\`. The recovery sweep recovers it from the Slack DM.`,
+          `Nothing was recorded, so the row is still \`Pending\`. The person has been told ` +
+          `their answer was saved, and the 14:00 reminder will nudge them about it.`,
       }),
     });
     const json = await response.json();
@@ -597,22 +595,10 @@ async function alertLostResponse(record: { email: string; date: string; status: 
 }
 
 /**
- * Forwards the record to Apps Script, retrying transient failures.
- *
- * The confirmation has already been shown to the user by this point, so giving
- * up here loses their answer with nobody the wiser. That is how the reported
- * glitch stayed invisible. Three attempts with backoff cover the Apps Script
- * concurrency errors seen during the post-prompt submit burst; if all three
- * fail we alert rather than swallow.
- *
- * Apps Script answers HTTP 200 even when the sheet write failed, so the JSON
- * body is inspected too — `response.ok` alone is not evidence of success.
- */
-/**
  * Records the answer in `mission-hq.attendance`.
  *
- * This replaces an HTTP forward to an Apps Script web app, which is exactly
- * where answers used to go missing: the confirmation DM is updated BEFORE the
+ * This replaces an HTTP forward to a web app in another system, which is
+ * exactly where answers used to go missing: the DM was updated BEFORE the
  * write is attempted, so a failed forward left somebody looking at "Thank you
  * for your update!" over a cell that still said Pending. Every one of those had
  * to be rescued later by re-reading their Slack DM.
@@ -679,57 +665,6 @@ async function recordAttendance(record: {
 
   await alertLostResponse(record, lastReason);
   throw new Error(`attendance write failed: ${lastReason}`);
-}
-
-async function forwardToAppsScript(record: { email: string; date: string; status: string; department?: string; location?: string }) {
-  const appsScriptUrl = getRequiredEnv("MISSION_HQ_APPS_SCRIPT_URL");
-  const headers: Record<string, string> = { "content-type": "application/json" };
-  const sharedSecret = Deno.env.get("MISSION_HQ_APPS_SCRIPT_SHARED_SECRET");
-  if (sharedSecret) headers["x-mission-hq-secret"] = sharedSecret;
-
-  const attempts = 3;
-  let lastReason = "";
-
-  for (let attempt = 1; attempt <= attempts; attempt++) {
-    try {
-      const response = await fetch(appsScriptUrl, {
-        method: "POST",
-        headers,
-        body: JSON.stringify(record),
-      });
-      const body = await response.text();
-
-      if (!response.ok) {
-        lastReason = `HTTP ${response.status} ${body.slice(0, 300)}`;
-      } else {
-        // A 200 carrying {"success":false} is a failed write wearing a success
-        // status code — treat it as the failure it is.
-        let succeeded = true;
-        try {
-          const parsed = JSON.parse(body);
-          if (parsed && parsed.success === false) {
-            succeeded = false;
-            lastReason = `Apps Script reported: ${parsed.message || parsed.error || "success:false"}`;
-          }
-        } catch {
-          // Non-JSON 200 (e.g. an Apps Script error page) — assume the worst.
-          succeeded = false;
-          lastReason = `non-JSON response: ${body.slice(0, 300)}`;
-        }
-        if (succeeded) return;
-      }
-    } catch (error) {
-      lastReason = `fetch threw: ${error instanceof Error ? error.message : String(error)}`;
-    }
-
-    console.error(`MissionHQ forward attempt ${attempt}/${attempts} failed: ${lastReason}`);
-    if (attempt < attempts) {
-      await new Promise((resolve) => setTimeout(resolve, attempt * 1500));
-    }
-  }
-
-  await alertLostResponse(record, lastReason);
-  throw new Error(`Apps Script forward failed after ${attempts} attempts: ${lastReason}`);
 }
 
 async function processSlackInteraction(payload: SlackPayload) {

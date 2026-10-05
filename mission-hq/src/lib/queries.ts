@@ -5,9 +5,9 @@ import { requireDb } from "./db";
  * Every read the dashboard does.
  *
  * All of it is aggregated or indexed in Postgres rather than fetched and
- * reduced here. The screen this replaces called an Apps Script web app which
- * read a 376 x 346 cell grid and returned the whole thing; the cold start alone
- * was three to four seconds before a single byte of data moved.
+ * reduced here. The screen this replaces called a web app that read a
+ * 376 x 346 cell grid and returned the whole thing; the cold start alone was
+ * three to four seconds before a single byte of data moved.
  */
 
 export type Overview = {

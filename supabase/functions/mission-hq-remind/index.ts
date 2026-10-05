@@ -6,8 +6,8 @@
 // would sit below the original and read as the bot having lost it.
 //
 // WHAT THIS NO LONGER NEEDS TO DO.
-// The Apps Script version re-read each person's Slack DM before nudging them,
-// because the sheet write could be lost after the confirmation was shown — so
+// The previous version re-read each person's Slack DM before nudging them,
+// because the write could be lost after the confirmation was shown — so
 // "Pending" did not reliably mean "has not answered", and people were nagged 14
 // minutes after replying. That check cost one rate-limited Slack call per
 // pending person and ran under a 3.5-minute budget, past which it was skipped.

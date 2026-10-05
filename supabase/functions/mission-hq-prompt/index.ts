@@ -167,9 +167,9 @@ Deno.serve(async (req) => {
         if (!person) return;
         if (Date.now() - started > BUDGET_MS) return;
 
-        // No Slack account means no way to ask them. The sheet used to skip
-        // these in silence — somebody counted as not checked in for a message
-        // that was never sendable.
+        // No Slack account means no way to ask them. This used to be skipped
+        // in silence — somebody counted as not checked in for a message that
+        // was never sendable.
         if (!person.slack_user_id) { noSlackId.push(person.email); continue; }
 
         try {

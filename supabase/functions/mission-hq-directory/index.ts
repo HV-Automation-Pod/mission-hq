@@ -20,8 +20,8 @@
 //
 // 2. THE MANAGERS ROSTER. Its membership is the member list of its own Slack
 //    channel, because that is the list somebody actually maintains: people are
-//    added to it when they become a manager. It was seeded once from the
-//    spreadsheet and has never refreshed since.
+//    added to it when they become a manager. It was seeded once by hand and
+//    has never refreshed since.
 // ===========================================================================
 import { pg } from "../_shared/pg.ts";
 import { denyUnlessScheduler } from "../_shared/auth.ts";

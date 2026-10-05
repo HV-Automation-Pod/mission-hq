@@ -4,10 +4,9 @@
 > No change-specific content lives in this file: findings go in the report (§8) or on the PR,
 > and what lands here is only the rule that outlived them.
 
-**What this repo is now.** One Next.js dashboard and a set of Supabase Edge Functions, all
-reading one Postgres schema. The Google Apps Script project it replaced is gone from these
-rules; if you are reviewing a change that still touches `mission-hq-app-script/`, you are
-reviewing legacy and should say so in the report rather than applying these rules to it.
+**What this repo is.** One Next.js dashboard and a set of Supabase Edge Functions, all
+reading one Postgres schema. That is the whole system; there is no second backend and no
+legacy carve-out from these rules.
 
 ```text
 mission-hq/                     Next.js 16 dashboard (TypeScript, React 18) -> Vercel
@@ -18,7 +17,7 @@ supabase/migrations/*.sql       The schema. "mission-hq" schema in the WeCare pr
 | | |
 |---|---|
 | Production dashboard | https://mission-hq-dashboard.vercel.app |
-| Supabase project | WeCare, `jsehiivvzalvcrlybmlf` |
+| Supabase project | WeCare (ref in `supabase/.temp/linked-project.json`, or Vercel env) |
 | Schema | `"mission-hq"` (quoted everywhere; the hyphen is not optional) |
 | Remote | `github.com/HV-Automation-Pod/mission-hq` - use `gh`, not `glab` |
 

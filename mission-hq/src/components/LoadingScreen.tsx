@@ -3,8 +3,8 @@
  *
  * Was a staged "uplink / syncing / calibrating" animation with a radar sweep,
  * which took about four seconds of theatre to say "wait". It made sense when
- * the data really did take four seconds to arrive from Apps Script; now that
- * the same payload comes back from Postgres in a fraction of that, a sequence
+ * the data really did take four seconds to arrive; now that the same payload
+ * comes back from Postgres in a fraction of that, a sequence
  * of fake phases would be slower than the thing it is covering for.
  *
  * So: a quiet line that says what is happening and gets out of the way.

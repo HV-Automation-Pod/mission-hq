@@ -1,95 +1,74 @@
 # MissionHQ Dashboard
 
-Location tracking dashboard for monitoring team work locations and office compliance.
+Attendance and work-location dashboard for HyperVerge. Reads the `"mission-hq"`
+schema in Postgres directly; the Slack bot and the scheduled jobs that fill it
+live in `supabase/` at the repo root.
 
 ## What it does
 
-- Tracks daily work location of employees (Office, Home, Client Location, Split Day, Travel, Leave)
-- Monitors **4-day office compliance** requirement per week
-- Provides team-wise and individual breakdowns
-- Dark/light theme support
+- Tracks daily work location (Office, Home, Client Location, Split Day, Travel,
+  Leave, Anywhere, Compensatory WFH, the two half-day statuses)
+- Reports adherence to the office standard, per person and per department
+- Gives PnC an admin surface for the controls that drive the bot: WFO exemption,
+  prompt opt-in, location override, rosters, dashboard access, manual job runs
+- Dark/light theme, CSV export, command palette
 
-## Features
+**The compliance rule is not "4 office days a week".** It is
+`adherent / available`, where adherent = office days + WFH that fell on a
+**Wednesday**, and available = prompted - leave - WFA within the annual cap.
+`src/lib/policy.ts` is a deliberate mirror of the SQL function
+`member_metrics()`; a change to either has to land in both.
 
-### Overview Tab
-- Today's stats cards with response rate indicator
-- Daily attendance stacked bar chart (last 20 days)
-- Status distribution pie chart
-- Team-wise office percentage comparison
+## Tabs
 
-### Compliance Tab
-- 4-day office compliance tracker per employee
-- Compliant / At Risk / Non-Compliant categorization
-- Weekly office attendance trend line chart
+| Tab | |
+|---|---|
+| Overview | today's snapshot, week trend, status split, streaks, weekly office check, department comparison |
+| Compliance | weekly office check, historical compliance over a date range, office-percentage trend |
+| Departments | department-grouped status table, employee detail modal with heatmap |
+| Trends | daily stacked chart, weekly office percentage, department comparison |
+| Admin | admins only; everything PnC used to do by hand |
 
-### Team View Tab
-- Last 5 days status table per employee
-- Employee detail cards with compliance progress bars
-- Click any employee for detailed modal with:
-  - 30-day activity heatmap
-  - Weekly compliance breakdown
-  - Status count summary
+## Access
 
-### Trends Tab
-- Daily attendance stacked chart
-- Weekly office % trend
-- Team comparison chart
+Two roles. Anybody with a `hyperverge.co` Google account is a **member** and
+sees their own attendance only. A row in `dashboard_access` makes somebody an
+**admin**, who sees everyone and may edit if `can_edit` is set.
 
-### Other
-- Search by name or email
-- Filter by team and date
-- CSV export
-- Responsive design
+Scoping is enforced in SQL, by passing the viewer's email into
+`dashboard_payload(p_email)` - a member's request never loads anybody else's
+attendance into the process. The middleware only decides whether somebody is
+signed in; `getViewer()` decides what they are allowed to see.
 
-## Tech Stack
+## Tech
 
-- **Next.js 14** with App Router
-- **TypeScript**
-- **Tailwind CSS**
-- **Recharts** for charts
-- **date-fns** for date utilities
-- **Lucide React** for icons
+Next.js 16 (App Router, Turbopack), TypeScript, Tailwind, Recharts,
+`@supabase/ssr` for auth, Lucide icons.
 
-## Getting Started
+## Getting started
 
 ```bash
 npm install
-npm run dev
+npm run dev          # http://localhost:3000
+npx tsc --noEmit -p . # must be clean before deploying
 ```
 
-Open [http://localhost:3000](http://localhost:3000)
+Three environment variables are required, and without them every route returns
+500 rather than only the ones needing data:
 
-## Data Source
-
-Currently uses dummy data for demo. To connect to real data:
-
-1. Deploy the `doGet` endpoint in Google Apps Script (`App Script/WebApp.js`)
-2. Replace the dummy data import in `src/app/page.tsx` with a fetch call to your deployed web app URL
-
-### Google Apps Script Setup
-
-Add these as **Script Properties** (Project Settings > Script Properties):
-
-| Key | Value |
-|-----|-------|
-| `SLACK_BOT_TOKEN` | Your Slack bot token (`xoxb-...`) |
-| `SLACK_USER_TOKEN` | Your Slack user token (`xoxp-...`) |
-| `SLACK_CHANNEL_ID` | Your Slack channel ID |
-
-### API Endpoints (doGet)
-
-| Parameter | Description |
-|-----------|-------------|
-| `?action=all` | All employee data with date-wise statuses |
-| `?action=analytics` | Aggregated analytics |
-| `?action=today` | Today's status for everyone |
-| `?action=daterange&from=YYYY-MM-DD&to=YYYY-MM-DD` | Date range query |
-| `?action=teams` | Team-grouped data |
+| Variable | |
+|---|---|
+| `NEXT_PUBLIC_SUPABASE_URL` | middleware, session, db |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | middleware and the browser auth client |
+| `SUPABASE_SERVICE_ROLE_KEY` | server-only, never `NEXT_PUBLIC_` |
 
 ## Deployment
 
-```bash
-npm run build
-```
+The Vercel project is **`mission-hq`**, and it is deployed **from the repo
+root**, not from this folder - the project's Root Directory setting is already
+`mission-hq`. See the Deployment section of `CLAUDE.md`, where every trap in
+that sentence is written down with the outage it caused.
 
-Deploy to Vercel, Netlify, or any Node.js hosting.
+```bash
+cd <repo root> && vercel deploy --prod --yes
+```
