@@ -29,8 +29,9 @@ import { slack, alert } from "../_shared/slack.ts";
 const BUDGET_MS = 110_000;
 
 // In flight at once. Eight is well clear of anything Slack objects to across
-// distinct channels, and keeps 400 sends under a minute. A 429 is still handled
-// below rather than assumed away.
+// distinct channels, and keeps 400 sends under a minute. A 429 is retried with
+// Slack's own Retry-After inside `slack()` in _shared/slack.ts — which it was
+// not when this comment first claimed it.
 const CONCURRENCY = 8;
 
 type Recipient = {
