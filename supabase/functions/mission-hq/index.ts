@@ -1,4 +1,3 @@
-import { alert } from "../_shared/slack.ts";
 import { owedRows, pushRows } from "../_shared/zoho-push.ts";
 const encoder = new TextEncoder();
 
@@ -806,6 +805,17 @@ async function processSlackInteraction(payload: SlackPayload) {
  * eligibility rules live in exactly one place: somebody with no Zoho employee
  * id, a status that is still Pending, or a row the nightly job already sent
  * simply does not come back, and this does nothing.
+ *
+ * IT LOGS AND DOES NOT ALERT, which is a correction. The first version sent a
+ * Slack alert per failed answer, and the first time Zoho was unhappy it
+ * produced one alert per person, each naming that person, into a shared
+ * engineering channel — the precise thing REVIEW.md §3.2 forbids, written by
+ * the author of that rule.
+ *
+ * The aggregate signal already exists and is better: anything this fails to
+ * send stays in `zoho_push_queue`, and the 19:30 run alerts ONCE with a count
+ * if rows are still owed. A per-answer alert cannot say anything that one
+ * cannot, and it says it 348 times.
  */
 async function pushAnswerToZoho(email: string, date: string) {
   try {
@@ -814,20 +824,12 @@ async function pushAnswerToZoho(email: string, date: string) {
 
     const result = await pushRows(rows);
     if (result.failures.length) {
-      await alert(
-        "Immediate Zoho push failed for one answer",
-        `${email} on ${date}: ${result.failures.join("; ")}\n\n` +
-        `The answer IS saved. The row stays queued, so the 19:30 run will retry ` +
-        `it; this alert exists so a persistent failure is visible before then.`,
-        "mission-hq",
-      );
+      console.error(`zoho immediate push failed for ${email} on ${date}: ${result.failures.join("; ")}`);
     }
   } catch (error) {
-    await alert(
-      "Immediate Zoho push failed for one answer",
-      `${email} on ${date}: ${error instanceof Error ? error.message : String(error)}\n\n` +
-      `The answer IS saved and the row stays queued for the 19:30 run.`,
-      "mission-hq",
+    console.error(
+      `zoho immediate push failed for ${email} on ${date}: ` +
+      (error instanceof Error ? error.message : String(error)),
     );
   }
 }
