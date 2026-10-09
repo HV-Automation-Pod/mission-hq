@@ -28,6 +28,9 @@ type Pending = {
   full_name: string | null;
   slack_channel: string;
   message_ts: string;
+  /** Null when there is no live Slack link. Costs the mention, never the
+   *  nudge: see the header of migration 46. */
+  slack_user_id: string | null;
 };
 
 Deno.serve(async (request) => {
@@ -40,7 +43,7 @@ Deno.serve(async (request) => {
 
   try {
     const pending = await pg(
-      "reminder_recipients?select=email,full_name,slack_channel,message_ts&order=email",
+      "reminder_recipients?select=email,full_name,slack_channel,message_ts,slack_user_id&order=email",
     ) as Pending[];
 
     if (pending.length === 0) {
@@ -69,11 +72,18 @@ Deno.serve(async (request) => {
           ) as Array<{ status: string }>;
           if (live[0]?.status !== "Pending") { answeredMeanwhile++; continue; }
 
-          const name = (person.full_name || person.email.split("@")[0]).split(" ")[0];
+          // MENTION, not a name. A threaded reply addressed as plain text gets
+          // no badge and no highlight, and this is the one message in the whole
+          // system aimed squarely at somebody who is not paying attention: they
+          // already missed the 09:00 DM. Falling back to the first name keeps
+          // the nudge working for anybody without a live Slack link.
+          const who = person.slack_user_id
+            ? `<@${person.slack_user_id}>`
+            : (person.full_name || person.email.split("@")[0]).split(" ")[0];
           const posted = await slack("chat.postMessage", token, {
             channel: person.slack_channel,
             thread_ts: person.message_ts,
-            text: `${name}, a quick nudge: your check-in for ${day} is still open. ` +
+            text: `${who}, a quick nudge: your check-in for ${day} is still open. ` +
                   `Pick an option above and hit Submit whenever you get a moment.`,
           });
           if (!posted.ok) throw new Error(posted.error || "chat.postMessage failed");
