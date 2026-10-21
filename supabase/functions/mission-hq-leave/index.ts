@@ -20,6 +20,44 @@ import { pg, istToday } from "../_shared/pg.ts";
 import { denyUnlessScheduler } from "../_shared/auth.ts";
 import { alert } from "../_shared/slack.ts";
 import { zohoAccessToken, zohoDomain } from "../_shared/zoho.ts";
+import { setStatusForDay } from "../_shared/slack-status.ts";
+
+const LEAVE_STATUS = { text: "On Leave", emoji: ":palm_tree:" };
+
+/**
+ * Put a palm tree next to everybody this job has marked Leave today.
+ *
+ * BEST EFFORT, and kept apart from the attendance write on purpose: the muster
+ * data is what matters, and a Slack hiccup must not turn a correct sync into a
+ * failed one. It works from the rows `source = 'zoho-leave'` actually holds, not
+ * from Zoho's list, so somebody who answered the prompt themselves, or was
+ * marked by hand, is left alone. Anyone with a status already is skipped inside
+ * `setStatusForDay`, which is also what makes the afternoon pass cheap.
+ */
+async function markSlackStatus(day: string): Promise<{ set: number; skipped: number; noSlack: number; failed: string[] }> {
+  const rows = await pg(
+    `attendance?select=email&day=eq.${day}&status=eq.Leave&source=eq.zoho-leave&limit=2000`,
+  ) as Array<{ email: string }>;
+  const out = { set: 0, skipped: 0, noSlack: 0, failed: [] as string[] };
+  if (rows.length === 0) return out;
+
+  const emails = rows.map((r) => r.email.toLowerCase());
+  const ids = await pg(
+    `slack_active?select=email,slack_user_id&email=in.(${emails.map((e) => `"${e}"`).join(",")})`,
+  ) as Array<{ email: string; slack_user_id: string }>;
+  const byEmail = new Map(ids.map((i) => [i.email.toLowerCase(), i.slack_user_id]));
+
+  for (const email of emails) {
+    const id = byEmail.get(email);
+    if (!id) { out.noSlack++; continue; }
+    try {
+      if (await setStatusForDay(id, LEAVE_STATUS, day)) out.set++; else out.skipped++;
+    } catch (error) {
+      out.failed.push(`${email}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  return out;
+}
 
 type LeaveRecord = {
   EmployeeId?: string;
@@ -140,7 +178,20 @@ Deno.serve(async (req) => {
       );
     }
 
-    return Response.json({ ok: true, day, approved: records.length, written: matched, unmatched: unmatched.length });
+    let slackStatus: Awaited<ReturnType<typeof markSlackStatus>> | { error: string };
+    try {
+      slackStatus = await markSlackStatus(day);
+      if (slackStatus.failed.length) {
+        await alert("Could not set Slack leave status for some people",
+          slackStatus.failed.map((f) => `• ${f}`).join("\n") +
+          `\n\nTheir leave is recorded correctly; only the Slack status is missing.`, fn);
+      }
+    } catch (error) {
+      slackStatus = { error: error instanceof Error ? error.message : String(error) };
+      console.error(`slack leave status failed: ${slackStatus.error}`);
+    }
+
+    return Response.json({ ok: true, day, approved: records.length, written: matched, unmatched: unmatched.length, slackStatus });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     await alert("Zoho leave sync failed",

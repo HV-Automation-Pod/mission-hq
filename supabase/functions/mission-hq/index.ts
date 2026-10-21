@@ -1,4 +1,5 @@
 import { owedRows, pushRows } from "../_shared/zoho-push.ts";
+import { setStatusForDay } from "../_shared/slack-status.ts";
 const encoder = new TextEncoder();
 
 type SlackPayload = {
@@ -512,32 +513,7 @@ async function updateSlackProfileStatus(payload: SlackPayload, option: SelectedO
   const istToday = istDateString(new Date());
   if (date !== istToday) return; // only set for today's prompt, not backfilled dates
 
-  const userToken = getRequiredEnv("MISSION_HQ_SLACK_USER_TOKEN");
-
-  // Do not overwrite an existing status.
-  const getResp = await fetch(`https://slack.com/api/users.profile.get?user=${encodeURIComponent(userId)}`, {
-    headers: { authorization: `Bearer ${userToken}` },
-  });
-  const getJson = await getResp.json();
-  const current = getJson.profile || {};
-  const hasStatus = (current.status_text && current.status_text.trim() !== "") ||
-    (current.status_emoji && current.status_emoji.trim() !== "");
-  if (hasStatus) return;
-
-  // Expire at end of the IST day (23:59:59 IST = 18:29:59 UTC same date).
-  const [y, m, d] = istToday.split("-").map(Number);
-  const expiration = Math.floor(Date.UTC(y, m - 1, d, 18, 29, 59) / 1000);
-
-  const setResp = await fetch("https://slack.com/api/users.profile.set", {
-    method: "POST",
-    headers: { authorization: `Bearer ${userToken}`, "content-type": "application/json" },
-    body: JSON.stringify({
-      user: userId,
-      profile: { status_text: cfg.text, status_emoji: cfg.emoji, status_expiration: expiration },
-    }),
-  });
-  const setJson = await setResp.json();
-  if (!setJson.ok) throw new Error(`Slack profile.set failed: ${setJson.error || "unknown_error"}`);
+  await setStatusForDay(userId, cfg, istToday);
 }
 
 // Resolves a Slack user id to their email via users.info (bot token).
