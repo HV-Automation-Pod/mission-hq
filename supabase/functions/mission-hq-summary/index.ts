@@ -76,17 +76,15 @@ Deno.serve(async (req) => {
       method: "POST",
       body: JSON.stringify({ p_from: period.from, p_to: period.to }),
     }) as Array<Member & { email: string }>;
-    const byEmail = new Map(metrics.map((m) => [m.email, m]));
 
-    // Working days in the period: the days anybody was actually asked about.
-    // Counted in SQL, not by fetching rows. PostgREST truncates at 1000
-    // regardless of the limit asked for, which made this report "3 working
-    // days" for a fortnight and, worse, gave the Wednesday count that decides
-    // who the footnote names.
-    const [{ working_days: workingDays, wednesdays }] = await pg("rpc/period_days", {
+    // Working days in the period: business days anybody was actually asked
+    // about. Counted in SQL, not by fetching rows. PostgREST truncates at
+    // 1000 regardless of the limit asked for, which once made this report say
+    // "3 working days" for a fortnight.
+    const [{ working_days: workingDays }] = await pg("rpc/period_days", {
       method: "POST",
       body: JSON.stringify({ p_from: period.from, p_to: period.to }),
-    }) as Array<{ working_days: number; wednesdays: number }>;
+    }) as Array<{ working_days: number }>;
 
     const capRow = await pg("settings?select=value&key=eq.wfa_annual_cap") as Array<{ value: number }>;
     const wfaCap = Number(capRow?.[0]?.value ?? 15);
@@ -121,19 +119,32 @@ Deno.serve(async (req) => {
         continue;
       }
 
-      const emails = (await pg(
+      const emails = new Set((await pg(
         `group_members?select=email&group_key=eq.${group.key}`,
-      ) as Array<{ email: string }>).map((r) => r.email);
+      ) as Array<{ email: string }>).map((r) => r.email));
 
-      const all = emails
-        .map((e) => byEmail.get(e))
-        .filter((m): m is Member & { email: string } => !!m)
+      /*
+       * FILTER THE RANKED LIST, never rebuild it from the membership list.
+       *
+       * `member_metrics` returns rows already ordered — standard_pct, then
+       * check-in rate, then available days, then name — and that order IS the
+       * ranking the message numbers 1..n. Mapping over `group_members` instead
+       * and looking each person up threw it away: the rows came back in the
+       * order the view happened to emit, which is unordered.
+       *
+       * The published 1-15 October G&A snapshot is what that looks like. Row 10
+       * was 90% and row 11 was 71%, while 94% sat at row 23 — numbered like a
+       * ranking, ordered like nothing. A manager reading it asked why somebody
+       * at 90% was listed in the 60% band, and the tier was right; the position
+       * inside it was what made the whole table look wrong.
+       */
+      const all = metrics
+        .filter((m) => emails.has(m.email))
         .map((m) => ({
           ...m,
           delta: group.last_scores?.[m.email] === undefined
             ? null
             : m.standard_pct - group.last_scores[m.email],
-          offWedDays: [] as string[],
         }));
 
       // available = 0 means on leave the whole period. Listed separately rather
@@ -146,29 +157,6 @@ Deno.serve(async (req) => {
         continue;
       }
 
-      // The dates behind the Wednesday footnote, fetched only for the people it
-      // will actually name.
-      const needDates = ranked.filter(
-        (m) => m.tier !== "S" && m.tier !== "A" && m.pending === 0 && m.wfh_off_wed > 0,
-      );
-      if (needDates.length) {
-        const list = needDates.map((m) => `"${m.email}"`).join(",");
-        const rows = await pg(
-          `attendance?select=email,day,status&email=in.(${list})` +
-          `&day=gte.${period.from}&day=lte.${period.to}&status=in.("Home","Split Day","Half Day WFH Leave")`,
-        ) as Array<{ email: string; day: string }>;
-        for (const m of needDates) {
-          m.offWedDays = rows
-            .filter((r) => r.email === m.email)
-            .filter((r) => {
-              const [y, mo, d] = r.day.split("-").map(Number);
-              return new Date(y, mo - 1, d).getDay() !== 3;
-            })
-            .map((r) => r.day)
-            .sort();
-        }
-      }
-
       const message = buildMessage({
         groupName: group.name,
         period,
@@ -176,7 +164,6 @@ Deno.serve(async (req) => {
         members: ranked,
         unranked,
         workingDays,
-        wednesdays,
         wfaCap,
       });
 

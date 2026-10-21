@@ -17,14 +17,13 @@ export type Member = {
   adherent: number;
   pending: number;
   wfh: number;
-  wfh_off_wed: number;
+  wfh_excess: number;
   wfa_over_cap: number;
   wfa_ytd: number;
   standard_pct: number;
   ci_pct: number;
   tier: string;
   delta: number | null;
-  offWedDays: string[];
 };
 
 // Slack rejects a message over 50 blocks outright, and truncates nothing
@@ -32,28 +31,26 @@ export type Member = {
 const BLOCK_LIMIT = 50;
 const SECTION_CHARS = 2900;
 
+// Six bands, and NO PERCENTAGE IN ANY HEADING. The number is already on every
+// row, four columns wide, beside a bar. The old headings led with the band's
+// floor — "Good progress, 60%+ but short of the standard" — which printed a
+// member at 90% under the worst true thing about their position, three rows
+// above a 63%. That is the one thing a manager queried about this report.
+//
+// S and A are day counts (every available day); B through E are percentage
+// bands. B starts at 80, four days of five, so the boundary has the same shape
+// as the standard rather than being a round number chosen for roundness.
 const TIERS = [
   { key: "S", emoji: ":large_green_circle:",  label: "Exceeding the standard, in office every day" },
-  { key: "A", emoji: ":large_blue_circle:",   label: "Meeting the standard, office 4 days with WFH on Wednesday" },
-  { key: "B", emoji: ":large_yellow_circle:", label: "Good progress, 60%+ but short of the standard" },
-  { key: "C", emoji: ":large_orange_circle:", label: "Needs attention, below 60%" },
-  { key: "D", emoji: ":red_circle:",          label: "Check-in not active" },
+  { key: "A", emoji: ":large_blue_circle:",   label: "Meeting the standard, 4 days in office with 1 day WFH" },
+  { key: "B", emoji: ":large_yellow_circle:", label: "Just short of the standard" },
+  { key: "C", emoji: ":large_orange_circle:", label: "Some way short of the standard" },
+  { key: "D", emoji: ":red_circle:",          label: "Needs attention" },
+  { key: "E", emoji: ":white_circle:",        label: "Check-in not active" },
 ];
 
 // A day count can be a half, so render 9.5 but never 10.0.
 const days = (n: number) => (Math.round(n * 10) % 10 === 0 ? String(Math.round(n)) : n.toFixed(1));
-
-/**
- * Dates in the footnote as bare day numbers: "3, 10, 14" rather than
- * "2026-08-03, 2026-08-10, 2026-08-14".
- *
- * The period never spans more than one month and the header already names it,
- * so the year and month on every entry are nine characters of noise repeated a
- * few hundred times. On a large group that is the difference between a footnote
- * somebody skims and one they scroll past.
- */
-const dayNums = (days: string[]) =>
-  days.map((d) => String(Number(d.slice(8, 10)))).join(", ");
 
 const bar = (pct: number) => {
   const filled = Math.round((Math.max(0, Math.min(100, pct)) / 100) * 10);
@@ -104,10 +101,9 @@ export function buildMessage(args: {
   members: Member[];
   unranked: Member[];
   workingDays: number;
-  wednesdays: number;
   wfaCap: number;
 }) {
-  const { groupName, period, snapshotNo, members, unranked, workingDays, wednesdays, wfaCap } = args;
+  const { groupName, period, snapshotNo, members, unranked, workingDays, wfaCap } = args;
 
   const totalAvailable = members.reduce((s, m) => s + m.available, 0);
   const totalAdherent = members.reduce((s, m) => s + m.adherent, 0);
@@ -119,7 +115,8 @@ export function buildMessage(args: {
     : 0;
 
   const blocks: Record<string, unknown>[] = [
-    { type: "header", text: { type: "plain_text", text: `${groupName} · Attendance Snapshot` } },
+    // No header block: the bot's display name already says which group this is
+    // ("G&A Attendance Summary"), and a header repeated it right underneath.
     {
       type: "context",
       elements: [{
@@ -162,42 +159,6 @@ export function buildMessage(args: {
     rank += rows.length;
   }
 
-  // Named only when the WEEKDAY IS THE WHOLE STORY: move these WFH days to
-  // Wednesdays and the person would be AT the standard, not merely closer to it.
-  // That last clause is the one that matters. Without it the list names everyone
-  // with a stray WFH day, including somebody at 36% who would still be at 50%,
-  // and a footnote naming seventy people says nothing about any of them.
-  //
-  // Pending days disqualify too, deliberately: that person's gap is checking in
-  // at all, not which day they were at home, and telling them otherwise points
-  // them at the wrong fix.
-  const wouldMeet = members.filter(
-    (m) =>
-      m.tier !== "S" && m.tier !== "A" &&
-      m.pending === 0 &&
-      m.wfh_off_wed > 0 &&
-      // Day counts are halves, so compare with a tolerance rather than equality.
-      m.adherent + m.wfh_off_wed >= m.available - 0.01 &&
-      // AND THE SWAP HAS TO BE POSSIBLE. A fortnight holds about three
-      // Wednesdays; somebody WFH on eight other days cannot move them all onto
-      // Wednesdays that do not exist, so telling them the weekday was the
-      // problem is false and points them at the wrong fix. Their issue is the
-      // volume: the policy allows WFH on Wednesdays, so at most three.
-      m.wfh_off_wed <= wednesdays - (m.wfh - m.wfh_off_wed) + 0.01,
-  );
-  if (wouldMeet.length) {
-    blocks.push({
-      type: "context",
-      elements: [{
-        type: "mrkdwn",
-        text: "*Would be meeting the standard if these WFH days had been Wednesdays:* " +
-              wouldMeet.map((m) =>
-                `${m.full_name || m.email}${m.offWedDays.length ? ` (${dayNums(m.offWedDays)})` : ""}`
-              ).join("; ") + ".",
-      }],
-    });
-  }
-
   if (unranked.length) {
     blocks.push({
       type: "context",
@@ -236,15 +197,15 @@ export function buildMessage(args: {
       text: "*Our ask*\n" +
         ":one: *Check in every morning.* Office, Client, WFH, Travel, Leave and WFA all count. " +
         "Five seconds, every day.\n" +
-        ":two: *Wednesday is the default WFH day.* A Wednesday at home counts in full, the same " +
-        "as an office day. WFH on any other day does not.\n" +
+        ":two: *One WFH day a week, any day.* Wednesday is the default, and you may swap it. " +
+        "A second day at home in the same week does not count.\n" +
         ":three: *Pending is invisible.* A pending day cannot be credited as office presence, " +
         "even if you were there.",
     },
   });
   // Named directly, because a ranking that lists somebody at 0% without telling
   // them what to do about it is just a scoreboard.
-  const inactive = members.filter((m) => m.tier === "D");
+  const inactive = members.filter((m) => m.tier === "E");
   if (inactive.length) {
     blocks.push({
       type: "section",
@@ -264,14 +225,14 @@ export function buildMessage(args: {
             `leave, minus WFA, minus any day no check-in prompt was sent to you. Leave and WFA ` +
             `up to the ${wfaCap}-day yearly entitlement are excluded, counting neither for nor ` +
             `against you. WFA days beyond ${wfaCap}/year DO count against adherence. ` +
-            `· *Standard adherence* = (office days + WFH Wednesdays) ÷ available days. Wednesday ` +
-            `is the default WFH day, so a Wednesday at home counts in full: four office days plus ` +
-            `a Wednesday at home is 100%, not 80%. WFH on any other weekday does not count. ` +
-            `· *Exceeding* = in the office every available day · *Meeting* = every available day ` +
-            `either in the office or a WFH Wednesday · *Office* = Office, Client, Client Location, ` +
-            `Travel, Office + Client, Compensatory WFH · *Half days split in two*: Split Day = ` +
-            `½ office + ½ home, Half Day Office Leave = ½ office + ½ leave, Half Day WFH Leave = ` +
-            `½ home + ½ leave.`,
+            `· *Standard adherence* = (office days + up to ONE WFH day per week) ÷ available ` +
+            `days. Wednesday is the default WFH day and you may swap it for another, so the ` +
+            `weekday does not matter; a SECOND day at home in the same week does not count. ` +
+            `· *Exceeding* = in the office every available day · *Meeting* = four days in the ` +
+            `office with at most one day at home each week · *Office* = ` +
+            `Office, Client, Client Location, Travel, Office + Client, Compensatory WFH ` +
+            `· *Half days split in two*: Split Day = ½ office + ½ home, Half Day Office Leave = ` +
+            `½ office + ½ leave, Half Day WFH Leave = ½ home + ½ leave.`,
     }],
   });
 
