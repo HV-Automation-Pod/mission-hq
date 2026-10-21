@@ -1,12 +1,20 @@
 /**
  * The office-attendance policy, as one function.
  *
- * This is a deliberate mirror of `"mission-hq".member_metrics()` (migration 13)
- * and the day weights in migration 12. The fortnightly Slack report computes
- * from that SQL; every screen here computes from this file. There must be ONE
- * answer to "am I compliant", not one per surface — the dashboard used to say
- * `officeDays >= 4` while Slack said `(office + Wednesday WFH) / available`,
- * and the two disagreed about anyone who worked from home on a Wednesday.
+ * This is a deliberate mirror of `"mission-hq".member_metrics()` (migrations 13,
+ * 18, 48, 49) and the day weights in migration 12. The fortnightly Slack report
+ * computes from that SQL; every screen here computes from this file. There must
+ * be ONE answer to "am I compliant", not one per surface.
+ *
+ * AS OF MIGRATION 49 THE WFH ALLOWANCE IS ONE DAY PER CALENDAR WEEK, on any
+ * weekday. Wednesday is the policy's default, not its condition: the swap rule
+ * lets a member move it, so scoring only Wednesdays marked people absent for a
+ * day the policy had already granted them. A SECOND day at home in the same
+ * week is the miss.
+ *
+ * The cap is weekly and must be applied weekly, before anything is summed. A
+ * period-wide percentage cannot tell "home every Friday" apart from "home twice
+ * in one week and never again", and only the first follows the policy.
  *
  * If you change a weight or a rule here, change it in the SQL in the same
  * commit, and vice versa.
@@ -36,13 +44,16 @@ export const DAY_WEIGHTS: Record<string, { wfo: number; wfh: number; wfa: number
 /** Half days make every counter fractional, so never compare with `===`. */
 const EPSILON = 0.001;
 
-/** Wednesday, ISO day-of-week. The one weekday where WFH is the policy. */
-const WEDNESDAY = 3;
+/** One day at home per calendar week, whichever weekday it falls on. */
+const WFH_DAYS_PER_WEEK = 1;
 
-function isoDow(date: string): number {
-  // 0=Sunday from getUTCDay; ISO wants 1=Monday..7=Sunday.
-  const d = new Date(date + "T00:00:00Z").getUTCDay();
-  return d === 0 ? 7 : d;
+/** Monday of the calendar week `date` falls in, as yyyy-MM-dd. The allowance is
+ *  granted per week, so days have to be bucketed before they are summed. */
+function weekKey(date: string): string {
+  const d = new Date(date + "T00:00:00Z");
+  const iso = d.getUTCDay() === 0 ? 7 : d.getUTCDay();
+  d.setUTCDate(d.getUTCDate() - (iso - 1));
+  return d.toISOString().slice(0, 10);
 }
 
 export interface PeriodScore {
@@ -53,11 +64,11 @@ export interface PeriodScore {
   prompted: number;
   /** prompted - leave - WFA. Days the person could have been in an office. */
   available: number;
-  /** Office days + WFH that fell on a Wednesday. */
+  /** Office days. WFH does not contribute on any weekday (49). */
   adherent: number;
-  /** WFH on a weekday that is not Wednesday. This is the miss: it stays in the
-   *  denominator and out of the numerator. */
-  wfhOffWed: number;
+  /** WFH beyond the one-day-a-week allowance. This is the miss: it stays in
+   *  the denominator and out of the numerator. */
+  wfhExcess: number;
   wfo: number;
   wfh: number;
   wfa: number;
@@ -70,7 +81,8 @@ export interface PeriodScore {
   /** adherent / available, 0-100. Null when nothing was available — somebody on
    *  leave all week has no rate, and showing them 0% would be a lie. */
   pct: number | null;
-  /** Met the policy: in an office every available day bar Wednesdays at home. */
+  /** Met the standard: every available day was either in the office or inside
+   *  that week's single WFH day. */
   isCompliant: boolean;
 }
 
@@ -143,7 +155,9 @@ export function scorePeriod(
    */
   allowance?: Allowance,
 ): PeriodScore {
-  let wfo = 0, wfh = 0, wfa = 0, leave = 0, wfhWed = 0, wfhOffWed = 0, pending = 0, prompted = 0;
+  let wfo = 0, wfh = 0, wfa = 0, leave = 0, pending = 0, prompted = 0;
+  // WFH per calendar week, so the allowance can be capped week by week.
+  const wfhByWeek = new Map<string, number>();
 
   for (const date of dates) {
     const status = statuses[date];
@@ -163,8 +177,8 @@ export function scorePeriod(
     wfa += w.wfa;
     leave += w.leave;
     if (w.wfh > 0) {
-      if (isoDow(date) === WEDNESDAY) wfhWed += w.wfh;
-      else wfhOffWed += w.wfh;
+      const k = weekKey(date);
+      wfhByWeek.set(k, (wfhByWeek.get(k) ?? 0) + w.wfh);
     }
   }
 
@@ -172,10 +186,18 @@ export function scorePeriod(
   // figures all of it is neutral; see the note on the parameter.
   const wfaWithin = allowance ? wfaWithinEntitlement(statuses, dates, wfa, allowance) : wfa;
   const available = prompted - leave - wfaWithin;
-  const adherent = wfo + wfhWed;
+  // One day a week, whichever day it was. Capped per week BEFORE summing:
+  // half days make these fractional, so two half-days at home in one week
+  // consume the whole allowance.
+  let wfhAllowed = 0, wfhExcess = 0;
+  for (const inWeek of wfhByWeek.values()) {
+    wfhAllowed += Math.min(inWeek, WFH_DAYS_PER_WEEK);
+    wfhExcess  += Math.max(inWeek - WFH_DAYS_PER_WEEK, 0);
+  }
+  const adherent = wfo + wfhAllowed;
 
   return {
-    prompted, available, adherent, wfhOffWed,
+    prompted, available, adherent, wfhExcess,
     wfo, wfh, wfa, wfaWithin, leave, pending,
     pct: available > EPSILON ? Math.round((adherent / available) * 100) : null,
     isCompliant: available > EPSILON && adherent >= available - EPSILON,

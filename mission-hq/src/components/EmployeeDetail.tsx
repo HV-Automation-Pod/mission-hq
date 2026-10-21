@@ -221,7 +221,7 @@ export default function EmployeeDetail({ employee, dates, onClose }: Props) {
                       <div className="font-semibold" style={{ color: "var(--text-primary)" }}>{w.weekLabel}</div>
                       <div className="text-[11px]" style={{ color: "var(--text-muted)" }}>
                         {fmtDays(w.adherentDays)} of {fmtDays(w.availableDays)} available day{w.availableDays === 1 ? "" : "s"}
-                        {w.wfhOffWedDays > 0 && ` · ${fmtDays(w.wfhOffWedDays)} WFH off-Wednesday`}
+                        {w.wfhExcessDays > 0 && ` · ${fmtDays(w.wfhExcessDays)} extra WFH`}
                       </div>
                     </div>
                     <div className="flex-1 hidden sm:block">

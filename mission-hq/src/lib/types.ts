@@ -56,11 +56,11 @@ export interface WeekCompliance {
   promptedDays: number;
   /** Days they could have been in an office: prompted minus leave minus WFA. */
   availableDays: number;
-  /** Office days plus WFH that fell on a Wednesday. Wednesday is the default
-   *  WFH day, so a Wednesday at home scores like an office day. */
+  /** Office days plus up to ONE WFH day per calendar week, on any weekday.
+   *  Wednesday is the policy's default, not its condition (migration 49). */
   adherentDays: number;
-  /** WFH on a weekday that is not Wednesday — the actual miss. */
-  wfhOffWedDays: number;
+  /** WFH beyond one day in a week — the actual miss. */
+  wfhExcessDays: number;
   /** adherentDays / availableDays, 0-100. Null for a week with nothing
    *  available: somebody on leave all week has no rate, and 0% would be a lie. */
   pct: number | null;

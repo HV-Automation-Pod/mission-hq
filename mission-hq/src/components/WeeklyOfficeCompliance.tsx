@@ -12,9 +12,9 @@ import Tooltip from "./Tooltip";
  *
  * This screen used to count `officeDays >= 4` and ignore WHICH day. In a week
  * like Sep 28 - Oct 2 (four working days; Oct 2 was Gandhi Jayanti) somebody
- * following the policy exactly — office Mon, Tue, Thu, home Wednesday — scored
+ * following the policy exactly — office four days, home one — scored
  * 3/4 and read as non-compliant, while Slack called the same fortnight 100%.
- * Wednesday WFH now counts in full, and the target is "every available day",
+ * one WFH day a week counts in full on any weekday, and the target is "every available day",
  * which lands on 4 in an ordinary week without hardcoding the number 4.
  *
  * There is also no holiday list here any more. A day with no attendance row is
@@ -404,8 +404,8 @@ export default function WeeklyOfficeCompliance({ employees, dates }: Props) {
                       ) : (
                         <>
                           <Tooltip width={220} label={
-                            `${fmtDays(emp.score.wfo)} office + ${fmtDays(emp.score.adherent - emp.score.wfo)} Wednesday WFH, out of ${fmtDays(emp.score.available)} available` +
-                            (emp.score.wfhOffWed > 0 ? ` \u00b7 ${fmtDays(emp.score.wfhOffWed)} WFH on another weekday` : "") +
+                            `${fmtDays(emp.score.wfo)} office + ${fmtDays(emp.score.adherent - emp.score.wfo)} WFH within the weekly allowance, out of ${fmtDays(emp.score.available)} available` +
+                            (emp.score.wfhExcess > 0 ? ` \u00b7 ${fmtDays(emp.score.wfhExcess)} WFH beyond one day that week` : "") +
                             (emp.score.pending > 0 ? ` \u00b7 ${fmtDays(emp.score.pending)} unanswered` : "")}>
                             <span className="flex items-center justify-center gap-1.5">
                               <span className="text-sm font-bold font-mono" style={{ color: "var(--text-primary)" }}>{fmtDays(emp.score.adherent)}</span>

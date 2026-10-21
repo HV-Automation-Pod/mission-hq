@@ -790,7 +790,7 @@ export function TeamComplianceChart({ employees, dates }: TeamComplianceProps) {
     .sort((a, b) => b["Office %"] - a["Office %"]);
 
   return (
-    <ChartCard title="Department Office Attendance" subtitle="Last 5 working days vs 80% target · Wednesday WFH counts in full">
+    <ChartCard title="Department Office Attendance" subtitle="Last 5 working days vs 80% target · office days only WFH counts in full">
       <ResponsiveContainer width="100%" height={Math.max(200, data.length * 44 + 40)}>
         <BarChart data={data} barSize={22} layout="vertical">
           <CartesianGrid strokeDasharray="3 3" stroke={c.grid} horizontal={false} />
@@ -828,7 +828,7 @@ export function WeeklyOfficeTrend({ employees, dates }: WeeklyTrendProps) {
   const c = CHART_COLORS[theme === "dark" ? "dark" : "light"];
   // Group the window into weeks, then score each person's week with the shared
   // policy and sum. Scoring a week at a time rather than a day at a time is
-  // what lets a Wednesday at home count: the rule needs to know the weekday.
+  // 49: WFH no longer counts on any weekday, so the weekday is reporting only.
   const weekDates: Record<string, string[]> = {};
   dates.forEach((d) => {
     const weekLabel = format(parseISO(d), "'W'w MMM");

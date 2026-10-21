@@ -41,7 +41,7 @@ export function calculateWeeklyCompliance(
       promptedDays: score.prompted,
       availableDays: score.available,
       adherentDays: score.adherent,
-      wfhOffWedDays: score.wfhOffWed,
+      wfhExcessDays: score.wfhExcess,
       pct: score.pct,
       isCompliant: score.isCompliant,
     };
