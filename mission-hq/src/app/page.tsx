@@ -16,6 +16,7 @@ import AdminPanel from "@/components/admin/AdminPanel";
 import LoadingScreen from "@/components/LoadingScreen";
 import Tooltip from "@/components/Tooltip";
 import AccountMenu from "@/components/AccountMenu";
+import MyAttendance from "@/components/MyAttendance";
 import {
   MapPin, BarChart3, Users, ShieldCheck, Download, Sun, Moon, TrendingUp,
   RefreshCw, AlertCircle, Clock, AlertTriangle, Search, X, Command,
@@ -121,6 +122,8 @@ export default function Dashboard() {
   // request never loads anybody else's attendance — so this only decides what
   // is worth DRAWING, never what is allowed.
   const [viewer, setViewer] = useState<{ email: string; role: string } | null>(null);
+  const [statusOptions, setStatusOptions] = useState<{ value: string; status: string }[]>([]);
+  const [holidays, setHolidays] = useState<{ day: string; name: string; kind: "closed" | "optional" }[]>([]);
   const isAdmin = viewer?.role === "admin";
   // The payload already carries everyone the viewer may see, and a member's
   // copy holds exactly their own row, so this needs no extra request.
@@ -175,6 +178,8 @@ export default function Dashboard() {
       setEmployees(data.employees);
       setDates(data.dates);
       setViewer(data.viewer ?? null);
+      setStatusOptions(data.statusOptions ?? []);
+      setHolidays(data.holidays ?? []);
       if (data.dates.length > 0 && !isRefresh) setSelectedDate(data.dates[data.dates.length - 1]);
       setLastUpdated(new Date());
     } catch (err) {
@@ -187,6 +192,15 @@ export default function Dashboard() {
     const interval = setInterval(() => loadData(true), AUTO_REFRESH_INTERVAL);
     return () => clearInterval(interval);
   }, [loadData]);
+
+  // A member answers in Slack and comes back to check. The refresh button is
+  // gone from their view, so refresh when the tab regains focus instead.
+  useEffect(() => {
+    if (!viewer || isAdmin) return;
+    const onVisible = () => { if (document.visibilityState === "visible") loadData(true); };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, [viewer, isAdmin, loadData]);
 
   const departments = useMemo(() => Array.from(new Set(employees.flatMap((e) => e.departments))).filter(Boolean).sort(), [employees]);
 
@@ -238,6 +252,8 @@ export default function Dashboard() {
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
+      // Members get the single-page view, which has no tabs, palette or export.
+      if (viewer && !isAdmin) return;
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement || e.target instanceof HTMLTextAreaElement) return;
       if ((e.key === "k" && (e.metaKey || e.ctrlKey)) || e.key === "/") { e.preventDefault(); setCmdOpen(true); return; }
       if (e.key === "1") switchTab("overview");
@@ -253,7 +269,7 @@ export default function Dashboard() {
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [loadData, toggleTheme, handleExport, switchTab, isAdmin]);
+  }, [loadData, toggleTheme, handleExport, switchTab, isAdmin, viewer]);
 
   const todayCounts = useMemo(() => {
     let office = 0, pending = 0;
@@ -296,6 +312,12 @@ export default function Dashboard() {
         </div>
       </div>
     );
+  }
+
+  // ─── Member: one page, their own data ─────────────────
+  if (viewer && !isAdmin) {
+    return <MyAttendance employee={employees.find((e) => e.email === viewer.email) ?? employees[0] ?? null}
+      dates={dates} viewer={viewer} options={statusOptions} holidays={holidays} onChanged={() => loadData(true)} />;
   }
 
   // ─── Main ─────────────────────────────────────────────

@@ -29,17 +29,17 @@ export function SignIn({ next, variant }: { next?: string; variant: "primary" | 
     });
   }
 
+  const primary = variant === "primary";
   return (
     <button
       onClick={go}
       disabled={busy}
-      className={
-        variant === "primary"
-          ? "w-full h-10 rounded-[8px] bg-accent text-accent-text text-sm font-medium hover:opacity-90 disabled:opacity-60 transition"
-          : "w-full h-10 rounded-[8px] border border-border text-sm font-medium mt-4 hover:bg-surface-2 disabled:opacity-60 transition"
-      }
+      className={`w-full h-11 rounded-xl text-[14px] font-semibold transition-all active:scale-[0.98] disabled:opacity-60 ${primary ? "text-white hover:brightness-110" : "mt-5 border hover:bg-[var(--bg-surface-hover)]"}`}
+      style={primary
+        ? { background: "linear-gradient(135deg, #6366f1, #8b5cf6)", boxShadow: "0 6px 18px rgba(99, 102, 241, 0.35)" }
+        : { borderColor: "var(--border-default)", color: "var(--text-primary)" }}
     >
-      {busy ? "Opening Google…" : variant === "primary" ? "Continue with Google" : "Sign in with a different account"}
+      {busy ? "Opening Google..." : primary ? "Continue with Google" : "Sign in with a different account"}
     </button>
   );
 }

@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { createBrowserClient } from "@supabase/ssr";
-import { LogOut, Shield, User, Loader2 } from "lucide-react";
+import { LogOut, Loader2 } from "lucide-react";
 
 /**
  * Who you are signed in as, and the way out.
@@ -47,7 +47,6 @@ export default function AccountMenu({ viewer, fullName }: {
 
   if (!viewer) return null;
 
-  const isAdmin = viewer.role === "admin";
   const name = fullName?.trim() || viewer.email.split("@")[0];
   const initials = name.split(/[\s._-]+/).filter(Boolean).map((p) => p[0]).join("").slice(0, 2).toUpperCase();
 
@@ -92,13 +91,6 @@ export default function AccountMenu({ viewer, fullName }: {
           <div className="px-3.5 py-3" style={{ borderBottom: "1px solid var(--border-subtle)" }}>
             <div className="text-[13px] font-semibold truncate" style={{ color: "var(--text-primary)" }}>{name}</div>
             <div className="text-[11px] truncate mt-0.5" style={{ color: "var(--text-muted)" }}>{viewer.email}</div>
-            <div className="mt-2 inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[10px] font-semibold"
-              style={isAdmin
-                ? { background: "var(--accent-light)", color: "var(--accent)" }
-                : { background: "var(--bg-inset)", color: "var(--text-muted)" }}>
-              {isAdmin ? <Shield size={10} /> : <User size={10} />}
-              {isAdmin ? "Admin, sees everyone" : "Your own record only"}
-            </div>
           </div>
 
           <button role="menuitem" onClick={signOut} disabled={leaving}
