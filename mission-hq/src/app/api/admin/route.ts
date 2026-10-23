@@ -1,6 +1,6 @@
-import { NextResponse } from "next/server";
-import { getViewer } from "@/lib/session";
-import { getAdmins, getTriage, getJobs, getPeople, getGroups, getSlackSyncedAt } from "@/lib/admin-queries";
+import { getViewer } from "@/lib/server/session";
+import { fail, messageOf, ok } from "@/lib/server/respond";
+import { getAdmins, getTriage, getJobs, getPeople, getGroups, getSlackSyncedAt } from "@/lib/server/admin-queries";
 
 /**
  * Everything the Admin tab draws, in one request.
@@ -14,22 +14,18 @@ export const dynamic = "force-dynamic";
 export async function GET() {
   const viewer = await getViewer();
   if (!viewer) {
-    return NextResponse.json({ error: "Sign in with your HyperVerge account" }, { status: 401 });
+    return fail(401, "Sign in with your HyperVerge account");
   }
   if (viewer.role !== "admin") {
-    return NextResponse.json({ error: "Admins only" }, { status: 403 });
+    return fail(403, "Admins only");
   }
 
   try {
     const [admins, triage, jobs, people, groups, slackSyncedAt] = await Promise.all([
       getAdmins(), getTriage(), getJobs(), getPeople(), getGroups(), getSlackSyncedAt(),
     ]);
-    return NextResponse.json(
-      { admins, triage, jobs, people, groups, slackSyncedAt, viewer },
-      { headers: { "cache-control": "private, no-store" } },
-    );
+    return ok({ admins, triage, jobs, people, groups, slackSyncedAt, viewer });
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Unknown error";
-    return NextResponse.json({ error: message }, { status: 500 });
+    return fail(500, messageOf(err, "Unknown error"));
   }
 }

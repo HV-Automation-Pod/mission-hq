@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { NextResponse } from "next/server";
-import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
+import { fail, messageOf, ok } from "@/lib/server/respond";
+import { getSupabaseAdmin } from "@/lib/server/supabaseAdmin";
 
 export const runtime = "nodejs";
 
@@ -61,14 +61,14 @@ export async function POST(request: Request) {
   const supabase = getSupabaseAdmin();
   if (!supabase) {
     console.warn("[api/feedback] Supabase env vars missing — skipping save");
-    return NextResponse.json({ skipped: true }, { status: 200 });
+    return ok({ skipped: true });
   }
 
   let data: IncomingPayload;
   try {
     data = (await request.json()) as IncomingPayload;
   } catch {
-    return NextResponse.json({ error: "invalid json" }, { status: 400 });
+    return fail(400, "Invalid JSON");
   }
 
   const id = randomUUID();
@@ -84,10 +84,7 @@ export async function POST(request: Request) {
     ]);
   } catch (err) {
     console.error("[api/feedback] upload failed:", err);
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "upload failed" },
-      { status: 500 },
-    );
+    return fail(500, messageOf(err, "Upload failed"));
   }
 
   // Strip heavy fields from raw so we're not duplicating blobs in the table.
@@ -121,8 +118,8 @@ export async function POST(request: Request) {
 
   if (error) {
     console.error("[api/feedback] insert failed:", error);
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    return fail(500, error.message);
   }
 
-  return NextResponse.json({ id }, { status: 201 });
+  return ok({ id }, 201);
 }

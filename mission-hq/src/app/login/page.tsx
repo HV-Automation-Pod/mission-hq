@@ -1,8 +1,8 @@
 import { redirect } from "next/navigation";
 import { headers } from "next/headers";
 import { Building2, Check, CircleAlert, Home, type LucideIcon } from "lucide-react";
-import { BrandMark } from "@/components/BrandMark";
-import { getViewer, supabaseServer } from "@/lib/session";
+import { BrandMark } from "@/components/ui";
+import { getViewer, supabaseServer } from "@/lib/server/session";
 import { SignIn } from "./SignIn";
 
 export const metadata = { title: "Sign in · MissionHQ" };
