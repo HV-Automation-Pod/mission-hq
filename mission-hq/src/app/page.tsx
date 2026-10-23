@@ -15,6 +15,7 @@ import { DailyTrendChart, StatusPieChart, TeamComplianceChart, WeeklyOfficeTrend
 import WeeklyOfficeCompliance from "@/components/WeeklyOfficeCompliance";
 import AdminPanel from "@/components/admin/AdminPanel";
 import LoadingScreen from "@/components/LoadingScreen";
+import MemberLoading from "@/components/MemberLoading";
 import Tooltip from "@/components/Tooltip";
 import AccountMenu from "@/components/AccountMenu";
 import MemberView from "@/components/MemberView";
@@ -129,6 +130,12 @@ export default function Dashboard() {
   const isAdmin = viewer?.role === "admin";
   // An admin can look at their own attendance like anybody else. Kept in the
   // URL (?view=me) so a refresh or a shared link lands where it was left.
+  // The role is not known until the data arrives, but the loading screen has to
+  // be on screen before that. Remember it from the last visit: admins get the
+  // neutral screen, everybody else the member one. Unknown (first visit, or the
+  // server render) means member, the common case.
+  const [roleHint, setRoleHint] = useState<string | null>(null);
+  useEffect(() => { try { setRoleHint(localStorage.getItem("missionhq-role")); } catch { /* private mode: no hint */ } }, []);
   const [myView, setMyView] = useState(() => {
     if (typeof window === "undefined") return false;
     return new URLSearchParams(window.location.search).get("view") === "me";
@@ -197,6 +204,7 @@ export default function Dashboard() {
       setEmployees(data.employees);
       setDates(data.dates);
       setViewer(data.viewer ?? null);
+      try { if (data.viewer) localStorage.setItem("missionhq-role", data.viewer.role); } catch { /* ignore */ }
       setStatusOptions(data.statusOptions ?? []);
       setHolidays(data.holidays ?? []);
       if (data.dates.length > 0 && !isRefresh) setSelectedDate(data.dates[data.dates.length - 1]);
@@ -311,7 +319,7 @@ export default function Dashboard() {
   ];
 
   // ─── Loading: Mission Control acquiring signal ─────────
-  if (!mounted || loading) return <LoadingScreen />;
+  if (!mounted || loading) return roleHint === "admin" ? <LoadingScreen /> : <MemberLoading />;
 
   // ─── Error ────────────────────────────────────────────
   if (error) {
