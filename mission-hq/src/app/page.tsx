@@ -17,7 +17,7 @@ import AdminPanel from "@/components/admin/AdminPanel";
 import LoadingScreen from "@/components/LoadingScreen";
 import Tooltip from "@/components/Tooltip";
 import AccountMenu from "@/components/AccountMenu";
-import MyAttendance from "@/components/MyAttendance";
+import MemberView from "@/components/MemberView";
 import ViewSwitch from "@/components/ViewSwitch";
 import {
   BarChart3, Users, ShieldCheck, Download, Sun, Moon, TrendingUp,
@@ -337,7 +337,7 @@ export default function Dashboard() {
   if (viewer && showMine) {
     // No fallback to "the first row": for an admin that would be somebody
     // else's attendance. A member's payload is one row, an admin's is everyone's.
-    return <MyAttendance employee={employees.find((e) => e.email === viewer.email) ?? null}
+    return <MemberView employee={employees.find((e) => e.email === viewer.email) ?? null}
       onBackToAdmin={isAdmin ? () => setMyView(false) : undefined}
       dates={dates} viewer={viewer} options={statusOptions} holidays={holidays} onChanged={() => loadData(true)} />;
   }
