@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { requireDb } from "@/lib/db";
+import { publicDb, requireDb } from "@/lib/db";
 import { getViewer } from "@/lib/session";
 
 /**
@@ -33,14 +33,23 @@ export async function GET(request: Request) {
   const days = Number(new URL(request.url).searchParams.get("days") ?? 90);
 
   try {
-    const { data, error } = await requireDb().rpc("dashboard_payload", {
-      p_days: Number.isFinite(days) && days > 0 && days <= 1000 ? days : 90,
-      p_email: viewer.role === "admin" ? null : viewer.email,
-    });
-    if (error) throw new Error(error.message);
+    const db = requireDb();
+    // The picker's options ride along, fetched in parallel, so opening it is
+    // instant instead of a server round trip. Admins get them too, for their
+    // own "My attendance" view.
+    const [payload, options] = await Promise.all([
+      db.rpc("dashboard_payload", {
+        p_days: Number.isFinite(days) && days > 0 && days <= 1000 ? days : 90,
+        p_email: viewer.role === "admin" ? null : viewer.email,
+      }),
+      db.from("locations").select("value,status").eq("active", true).order("sort_order"),
+    ]);
+    if (payload.error) throw new Error(payload.error.message);
+
+    const holidays = await upcomingHolidays();
 
     return NextResponse.json(
-      { ...(data as object), viewer: { email: viewer.email, role: viewer.role } },
+      { ...(payload.data as object), statusOptions: options.data ?? undefined, holidays, viewer: { email: viewer.email, role: viewer.role } },
       // Attendance changes all morning; a cached copy is worse than a slow one.
       // `private` matters more than usual here: the payload differs per viewer.
       { headers: { "cache-control": "private, no-store" } },
@@ -48,5 +57,35 @@ export async function GET(request: Request) {
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";
     return NextResponse.json({ success: false, error: message }, { status: 500 });
+  }
+}
+
+/**
+ * The next few holidays that matter, from `public.holidays` (WeCare's list, the
+ * same one `is_business_day()` reads).
+ *
+ * TWO KINDS, and telling them apart is the whole job (migration 45):
+ *   counts = true    the office is closed. A real holiday.
+ *   counts = false   a RESTRICTED holiday. Optional, taken per person, and the
+ *                    office is open, so most people are at work.
+ * Showing a restricted one as "holiday" tells people the office is shut when it
+ * is not, which is the same mistake migration 45 fixed in the prompt job.
+ *
+ * Weekend dates are dropped: a holiday on a Sunday changes nothing for anybody.
+ * Fails soft, because a nice-to-know must never take the attendance payload down.
+ */
+async function upcomingHolidays(): Promise<{ day: string; name: string; kind: "closed" | "optional" }[]> {
+  try {
+    if (!publicDb) return [];
+    const today = new Date(Date.now() + 5.5 * 3600_000).toISOString().slice(0, 10);
+    const { data, error } = await publicDb
+      .from("holidays").select("day,name,counts").gte("day", today).order("day").limit(30);
+    if (error || !data) return [];
+    return data
+      .filter((h) => { const d = new Date(`${h.day}T00:00:00Z`).getUTCDay(); return d !== 0 && d !== 6; })
+      .slice(0, 5)
+      .map((h) => ({ day: String(h.day), name: String(h.name ?? "Holiday"), kind: h.counts === false ? "optional" as const : "closed" as const }));
+  } catch {
+    return [];
   }
 }

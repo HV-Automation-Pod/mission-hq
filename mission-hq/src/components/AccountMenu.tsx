@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { createBrowserClient } from "@supabase/ssr";
-import { LogOut, Shield, User, Loader2 } from "lucide-react";
+import { LogOut, Loader2 } from "lucide-react";
 
 /**
  * Who you are signed in as, and the way out.
@@ -29,6 +29,7 @@ export default function AccountMenu({ viewer, fullName }: {
 }) {
   const [open, setOpen] = useState(false);
   const [leaving, setLeaving] = useState(false);
+  const [confirming, setConfirming] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -47,7 +48,6 @@ export default function AccountMenu({ viewer, fullName }: {
 
   if (!viewer) return null;
 
-  const isAdmin = viewer.role === "admin";
   const name = fullName?.trim() || viewer.email.split("@")[0];
   const initials = name.split(/[\s._-]+/).filter(Boolean).map((p) => p[0]).join("").slice(0, 2).toUpperCase();
 
@@ -92,21 +92,29 @@ export default function AccountMenu({ viewer, fullName }: {
           <div className="px-3.5 py-3" style={{ borderBottom: "1px solid var(--border-subtle)" }}>
             <div className="text-[13px] font-semibold truncate" style={{ color: "var(--text-primary)" }}>{name}</div>
             <div className="text-[11px] truncate mt-0.5" style={{ color: "var(--text-muted)" }}>{viewer.email}</div>
-            <div className="mt-2 inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[10px] font-semibold"
-              style={isAdmin
-                ? { background: "var(--accent-light)", color: "var(--accent)" }
-                : { background: "var(--bg-inset)", color: "var(--text-muted)" }}>
-              {isAdmin ? <Shield size={10} /> : <User size={10} />}
-              {isAdmin ? "Admin, sees everyone" : "Your own record only"}
-            </div>
           </div>
 
-          <button role="menuitem" onClick={signOut} disabled={leaving}
-            className="w-full flex items-center gap-2 px-3.5 py-2.5 text-[12px] font-medium transition-colors hover:bg-[var(--bg-surface-hover)] disabled:opacity-50"
-            style={{ color: "var(--text-secondary)" }}>
-            {leaving ? <Loader2 size={13} className="animate-spin" /> : <LogOut size={13} />}
-            {leaving ? "Signing out…" : "Sign out"}
-          </button>
+          {confirming ? (
+            <div className="px-3.5 py-3">
+              <div className="text-[12px] font-medium" style={{ color: "var(--text-primary)" }}>Sign out of MissionHQ?</div>
+              <div className="flex gap-2 mt-2.5">
+                <button onClick={() => setConfirming(false)} disabled={leaving}
+                  className="flex-1 h-8 rounded-lg text-[12px] font-medium border hover:bg-[var(--bg-surface-hover)]"
+                  style={{ borderColor: "var(--border-default)", color: "var(--text-secondary)" }}>Cancel</button>
+                <button onClick={signOut} disabled={leaving}
+                  className="flex-1 h-8 rounded-lg text-[12px] font-semibold text-white disabled:opacity-60 inline-flex items-center justify-center gap-1.5"
+                  style={{ background: "var(--accent)" }}>
+                  {leaving && <Loader2 size={12} className="animate-spin" />} Sign out
+                </button>
+              </div>
+            </div>
+          ) : (
+            <button role="menuitem" onClick={() => setConfirming(true)}
+              className="w-full flex items-center gap-2 px-3.5 py-2.5 text-[12px] font-medium transition-colors hover:bg-[var(--bg-surface-hover)]"
+              style={{ color: "var(--text-secondary)" }}>
+              <LogOut size={13} /> Sign out
+            </button>
+          )}
         </div>
       )}
     </div>

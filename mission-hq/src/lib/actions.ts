@@ -324,3 +324,69 @@ export async function runJob(job: keyof typeof JOBS, body: Record<string, unknow
     return { status: response.status, body: text.slice(0, 2000) };
   });
 }
+
+// ─── Members answering for themselves ─────────────────────────────────────
+
+/** How far back a missed day can still be answered. It is the Zoho push
+ *  queue's window: a row older than this would be saved here but never reach
+ *  Zoho, which is a worse outcome than refusing it. */
+const BACKFILL_DAYS = 60;
+
+/** Today in IST. Vercel runs in UTC, and between 00:00 and 05:30 IST the UTC
+ *  date is still yesterday, which would let a member answer "tomorrow". */
+function istDay(offsetDays = 0): string {
+  const d = new Date(Date.now() + 5.5 * 3600_000 + offsetDays * 86_400_000);
+  return d.toISOString().slice(0, 10);
+}
+
+/**
+ * A member answers for themselves, from the dashboard.
+ *
+ * The rules are the product decision, so they live here and not in the UI:
+ *   - the email is the SESSION's, never a parameter. Nobody can answer for
+ *     anybody else through this.
+ *   - a past day can be answered only while it is still Pending. Once answered
+ *     it is a record, and changing it after the fact is an admin's call.
+ *   - today can be answered and changed freely.
+ *   - a day nobody asked about (no row) is not theirs to create.
+ *   - approved leave belongs to Zoho and is not overwritten.
+ *
+ * Writes the same row the Slack webhook does, so the 19:30 sweep pushes it to
+ * Zoho (`updated_at` is newer than `zoho_pushed_at`). `source` says it came
+ * from the dashboard.
+ */
+export async function answerMyAttendance(day: string, value: string): Promise<ActionResult> {
+  return attempt(async () => {
+    const viewer = await getViewer();
+    if (!viewer) throw new Error("Not signed in");
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) throw new Error("That is not a valid day");
+
+    const today = istDay();
+    if (day > today) throw new Error("You cannot answer for a future day");
+    if (day < istDay(-BACKFILL_DAYS)) throw new Error(`Days older than ${BACKFILL_DAYS} days cannot be answered here. Ask People & Culture.`);
+
+    const db = requireDb();
+    // Independent reads, so one round trip instead of two.
+    const [{ data: row, error: readError }, { data: location }] = await Promise.all([
+      db.from("attendance").select("status,source").eq("email", viewer.email).eq("day", day).maybeSingle(),
+      db.from("locations").select("status").eq("value", value).eq("active", true).maybeSingle(),
+    ]);
+    if (readError) throw new Error(readError.message);
+
+    if (!row) throw new Error("You were not asked about that day, so there is nothing to answer.");
+    if (row.source === "zoho-leave") throw new Error("Approved leave comes from Zoho and cannot be changed here.");
+    if (day < today && row.status !== "Pending") {
+      throw new Error("That day is already answered. Past answers cannot be changed.");
+    }
+
+    if (!location) throw new Error("Pick one of the listed options.");
+
+    const now = new Date().toISOString();
+    const { error } = await db.from("attendance").upsert(
+      { email: viewer.email, day, status: location.status, source: "dashboard", answered_at: now, updated_at: now },
+      { onConflict: "email,day" },
+    );
+    if (error) throw new Error(error.message);
+    revalidatePath("/");
+  });
+}

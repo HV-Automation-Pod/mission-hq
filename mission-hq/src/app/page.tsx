@@ -1,5 +1,6 @@
 "use client";
 
+import { BrandMark } from "@/components/BrandMark";
 import { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import { fetchAllData } from "@/lib/api";
 import { computeEmployeeAnalytics } from "@/lib/utils";
@@ -14,10 +15,13 @@ import { DailyTrendChart, StatusPieChart, TeamComplianceChart, WeeklyOfficeTrend
 import WeeklyOfficeCompliance from "@/components/WeeklyOfficeCompliance";
 import AdminPanel from "@/components/admin/AdminPanel";
 import LoadingScreen from "@/components/LoadingScreen";
+import MemberLoading from "@/components/MemberLoading";
 import Tooltip from "@/components/Tooltip";
 import AccountMenu from "@/components/AccountMenu";
+import MemberView from "@/components/MemberView";
+import ViewSwitch from "@/components/ViewSwitch";
 import {
-  MapPin, BarChart3, Users, ShieldCheck, Download, Sun, Moon, TrendingUp,
+  BarChart3, Users, ShieldCheck, Download, Sun, Moon, TrendingUp,
   RefreshCw, AlertCircle, Clock, AlertTriangle, Search, X, Command,
   Keyboard, Flame, Trophy, Award, Settings,
 } from "lucide-react";
@@ -121,7 +125,32 @@ export default function Dashboard() {
   // request never loads anybody else's attendance — so this only decides what
   // is worth DRAWING, never what is allowed.
   const [viewer, setViewer] = useState<{ email: string; role: string } | null>(null);
+  const [statusOptions, setStatusOptions] = useState<{ value: string; status: string }[]>([]);
+  const [holidays, setHolidays] = useState<{ day: string; name: string; kind: "closed" | "optional" }[]>([]);
   const isAdmin = viewer?.role === "admin";
+  // An admin can look at their own attendance like anybody else. Kept in the
+  // URL (?view=me) so a refresh or a shared link lands where it was left.
+  // The role is not known until the data arrives, but the loading screen has to
+  // be on screen before that. Remember it from the last visit: admins get the
+  // neutral screen, everybody else the member one. Unknown (first visit, or the
+  // server render) means member, the common case.
+  const [roleHint, setRoleHint] = useState<string | null>(null);
+  useEffect(() => { try { setRoleHint(localStorage.getItem("missionhq-role")); } catch { /* private mode: no hint */ } }, []);
+  const [myView, setMyView] = useState(() => {
+    if (typeof window === "undefined") return false;
+    return new URLSearchParams(window.location.search).get("view") === "me";
+  });
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (myView) params.set("view", "me"); else params.delete("view");
+    const qs = params.toString();
+    const next = `${window.location.pathname}${qs ? `?${qs}` : ""}${window.location.hash}`;
+    if (next !== `${window.location.pathname}${window.location.search}${window.location.hash}`) {
+      window.history.replaceState(null, "", next);
+    }
+  }, [myView]);
+  /** The single-page view: every member, and an admin who switched to it. */
+  const showMine = !!viewer && (!isAdmin || myView);
   // The payload already carries everyone the viewer may see, and a member's
   // copy holds exactly their own row, so this needs no extra request.
   const viewerName = useMemo(
@@ -175,6 +204,9 @@ export default function Dashboard() {
       setEmployees(data.employees);
       setDates(data.dates);
       setViewer(data.viewer ?? null);
+      try { if (data.viewer) localStorage.setItem("missionhq-role", data.viewer.role); } catch { /* ignore */ }
+      setStatusOptions(data.statusOptions ?? []);
+      setHolidays(data.holidays ?? []);
       if (data.dates.length > 0 && !isRefresh) setSelectedDate(data.dates[data.dates.length - 1]);
       setLastUpdated(new Date());
     } catch (err) {
@@ -187,6 +219,15 @@ export default function Dashboard() {
     const interval = setInterval(() => loadData(true), AUTO_REFRESH_INTERVAL);
     return () => clearInterval(interval);
   }, [loadData]);
+
+  // A member answers in Slack and comes back to check. The refresh button is
+  // gone from their view, so refresh when the tab regains focus instead.
+  useEffect(() => {
+    if (!showMine) return;
+    const onVisible = () => { if (document.visibilityState === "visible") loadData(true); };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, [showMine, loadData]);
 
   const departments = useMemo(() => Array.from(new Set(employees.flatMap((e) => e.departments))).filter(Boolean).sort(), [employees]);
 
@@ -238,6 +279,8 @@ export default function Dashboard() {
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
+      // Members get the single-page view, which has no tabs, palette or export.
+      if (showMine) return;
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement || e.target instanceof HTMLTextAreaElement) return;
       if ((e.key === "k" && (e.metaKey || e.ctrlKey)) || e.key === "/") { e.preventDefault(); setCmdOpen(true); return; }
       if (e.key === "1") switchTab("overview");
@@ -253,7 +296,7 @@ export default function Dashboard() {
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [loadData, toggleTheme, handleExport, switchTab, isAdmin]);
+  }, [loadData, toggleTheme, handleExport, switchTab, isAdmin, showMine]);
 
   const todayCounts = useMemo(() => {
     let office = 0, pending = 0;
@@ -276,7 +319,9 @@ export default function Dashboard() {
   ];
 
   // ─── Loading: Mission Control acquiring signal ─────────
-  if (!mounted || loading) return <LoadingScreen />;
+  // An admin who is opening their own member view (?view=me) is loading THAT
+  // screen, so the address outranks the remembered role.
+  if (!mounted || loading) return roleHint === "admin" && !myView ? <LoadingScreen /> : <MemberLoading />;
 
   // ─── Error ────────────────────────────────────────────
   if (error) {
@@ -296,6 +341,15 @@ export default function Dashboard() {
         </div>
       </div>
     );
+  }
+
+  // ─── Member: one page, their own data ─────────────────
+  if (viewer && showMine) {
+    // No fallback to "the first row": for an admin that would be somebody
+    // else's attendance. A member's payload is one row, an admin's is everyone's.
+    return <MemberView employee={employees.find((e) => e.email === viewer.email) ?? null}
+      onBackToAdmin={isAdmin ? () => setMyView(false) : undefined}
+      dates={dates} viewer={viewer} options={statusOptions} holidays={holidays} onChanged={() => loadData(true)} />;
   }
 
   // ─── Main ─────────────────────────────────────────────
@@ -324,9 +378,7 @@ export default function Dashboard() {
         <div className="max-w-[1400px] mx-auto px-4 sm:px-6 py-3 flex items-center justify-between">
           {/* Logo + Status */}
           <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-xl flex items-center justify-center shadow-lg" style={{ background: "linear-gradient(135deg, #6366f1, #8b5cf6)", boxShadow: "0 4px 12px rgba(99, 102, 241, 0.3)" }}>
-              <MapPin size={16} className="text-white" />
-            </div>
+            <BrandMark size={36} />
             <div>
               <h1 className="text-[15px] font-bold tracking-tight" style={{ color: "var(--text-primary)" }}>MissionHQ</h1>
               <div className="flex items-center gap-2 text-[11px]" style={{ color: "var(--text-muted)" }}>
@@ -343,6 +395,7 @@ export default function Dashboard() {
 
           {/* Actions */}
           <div className="flex items-center gap-1.5">
+            {isAdmin && <div className="mr-2"><ViewSwitch view="team" onChange={(v) => setMyView(v === "me")} /></div>}
             {lastUpdated && (
               <div className="hidden md:flex items-center gap-1.5 text-[11px] mr-2" style={{ color: "var(--text-muted)" }}>
                 <Clock size={11} />
