@@ -1,5 +1,6 @@
+import { BrandMark } from "@/components/BrandMark";
 import { redirect } from "next/navigation";
-import { CalendarCheck, History, MapPin, ShieldCheck } from "lucide-react";
+import { CalendarCheck, History, ShieldCheck } from "lucide-react";
 import { getViewer, supabaseServer } from "@/lib/session";
 import { SignIn } from "./SignIn";
 
@@ -25,16 +26,7 @@ const FEATURES = [
 const mono = { fontFamily: "var(--font-mono), ui-monospace, Menlo, monospace" } as const;
 
 function Mark({ size = 38 }: { size?: number }) {
-  return (
-    <div className="flex items-center justify-center flex-shrink-0"
-      style={{
-        width: size, height: size, borderRadius: size * 0.28,
-        background: "linear-gradient(135deg, #6366f1, #8b5cf6)",
-        boxShadow: "0 6px 20px -6px rgba(99, 102, 241, 0.7)",
-      }}>
-      <MapPin size={size * 0.45} className="text-white" />
-    </div>
-  );
+  return <BrandMark size={size} />;
 }
 
 export default async function LoginPage({

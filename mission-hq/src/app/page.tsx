@@ -1,5 +1,6 @@
 "use client";
 
+import { BrandMark } from "@/components/BrandMark";
 import { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import { fetchAllData } from "@/lib/api";
 import { computeEmployeeAnalytics } from "@/lib/utils";
@@ -19,7 +20,7 @@ import AccountMenu from "@/components/AccountMenu";
 import MyAttendance from "@/components/MyAttendance";
 import ViewSwitch from "@/components/ViewSwitch";
 import {
-  MapPin, BarChart3, Users, ShieldCheck, Download, Sun, Moon, TrendingUp,
+  BarChart3, Users, ShieldCheck, Download, Sun, Moon, TrendingUp,
   RefreshCw, AlertCircle, Clock, AlertTriangle, Search, X, Command,
   Keyboard, Flame, Trophy, Award, Settings,
 } from "lucide-react";
@@ -367,9 +368,7 @@ export default function Dashboard() {
         <div className="max-w-[1400px] mx-auto px-4 sm:px-6 py-3 flex items-center justify-between">
           {/* Logo + Status */}
           <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-xl flex items-center justify-center shadow-lg" style={{ background: "linear-gradient(135deg, #6366f1, #8b5cf6)", boxShadow: "0 4px 12px rgba(99, 102, 241, 0.3)" }}>
-              <MapPin size={16} className="text-white" />
-            </div>
+            <BrandMark size={36} />
             <div>
               <h1 className="text-[15px] font-bold tracking-tight" style={{ color: "var(--text-primary)" }}>MissionHQ</h1>
               <div className="flex items-center gap-2 text-[11px]" style={{ color: "var(--text-muted)" }}>

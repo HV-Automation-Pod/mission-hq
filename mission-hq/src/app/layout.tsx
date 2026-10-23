@@ -20,6 +20,8 @@ const jetbrainsMono = JetBrains_Mono({
 export const metadata: Metadata = {
   title: "MissionHQ Office Intelligence",
   description: "Real-time office attendance tracking & compliance analytics",
+  applicationName: "MissionHQ",
+  appleWebApp: { title: "MissionHQ", statusBarStyle: "black" },
 };
 
 export default function RootLayout({

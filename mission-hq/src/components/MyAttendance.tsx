@@ -1,5 +1,6 @@
 "use client";
 
+import { BrandMark } from "@/components/BrandMark";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { addDays, addMonths, differenceInCalendarDays, endOfMonth, format, parseISO, startOfMonth, startOfWeek, subDays } from "date-fns";
 import {
@@ -246,10 +247,7 @@ export default function MyAttendance({ employee: loaded, dates, viewer, options,
       <header className="glass border-b sticky top-0 z-40" style={{ borderColor: "var(--border-default)" }}>
         <div className="max-w-[1120px] mx-auto px-4 sm:px-6 py-3 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-xl flex items-center justify-center"
-              style={{ background: "linear-gradient(135deg, #6366f1, #8b5cf6)", boxShadow: "0 4px 12px rgba(99, 102, 241, 0.3)" }}>
-              <MapPin size={16} className="text-white" />
-            </div>
+            <BrandMark size={36} />
             <span className="text-[15px] font-bold tracking-tight" style={{ color: "var(--text-primary)" }}>MissionHQ</span>
           </div>
           <div className="flex items-center gap-1.5">
