@@ -40,3 +40,6 @@ verify_jwt = false
 
 [functions.mission-hq-access]
 verify_jwt = false
+
+[functions.mission-hq-answer-sync]
+verify_jwt = false

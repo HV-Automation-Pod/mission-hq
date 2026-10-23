@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { after } from "next/server";
 import { requireDb } from "./db";
 import { headers } from "next/headers";
 import { getViewer } from "./session";
@@ -388,5 +389,42 @@ export async function answerMyAttendance(day: string, value: string): Promise<Ac
     );
     if (error) throw new Error(error.message);
     revalidatePath("/");
+
+    // Zoho, the Slack message and the Slack status, after the response has gone:
+    // the person is not kept waiting on three other systems.
+    after(() => syncAnswerElsewhere(viewer.email, day));
   });
+}
+
+/**
+ * Tell the rest of the system a member answered from the dashboard.
+ *
+ * The Zoho credentials and the Slack tokens are secrets of the Supabase
+ * functions; the dashboard has none of them and should not. So it hands the
+ * row to `mission-hq-answer-sync`, which pushes that one day to Zoho, rewrites
+ * the Slack message if one was sent for it (and sends nothing if not), and sets
+ * the Slack status for today.
+ *
+ * Authenticated with the same shared token the scheduled jobs present, read
+ * from `settings`, so no new secret is needed. BEST EFFORT: the answer is
+ * already saved, and whatever this misses the 19:30 Zoho run still sweeps up.
+ */
+async function syncAnswerElsewhere(email: string, day: string) {
+  try {
+    const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const { data } = await requireDb().from("settings").select("value").eq("key", "edge_invoke_key").maybeSingle();
+    if (!url || !data?.value) {
+      console.error("answer sync skipped: Supabase URL or edge_invoke_key is not available");
+      return;
+    }
+    const response = await fetch(`${url}/functions/v1/mission-hq-answer-sync`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${data.value}`, "content-type": "application/json" },
+      body: JSON.stringify({ email, day }),
+      signal: AbortSignal.timeout(25_000),
+    });
+    if (!response.ok) console.error(`answer sync failed: HTTP ${response.status} ${(await response.text()).slice(0, 200)}`);
+  } catch (error) {
+    console.error("answer sync failed", error);
+  }
 }
