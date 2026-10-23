@@ -1,11 +1,11 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { C, Card, CountUp, GrowBar, Item, LinkButton, Pill, Stagger, WeekBars } from "@/components/ui";
 import { useAdmin } from "../context";
 import { FilterBar, Kpi, PageHeading, useScope } from "../ui";
 import { aggregate, excessWeeks, weeklySeries } from "@/lib/domain/analytics";
-import { ArrowRight } from "lucide-react";
+import { ArrowRight, ChevronDown } from "lucide-react";
 
 const n0 = (n: number) => Math.round(n).toLocaleString();
 
@@ -21,6 +21,10 @@ export default function AnalyticsPage() {
       .filter((d) => d.a.people > 0).sort((x, y) => (y.a.pct ?? -1) - (x.a.pct ?? -1)),
     [scope.depts, rows],
   );
+
+  const [showAll, setShowAll] = useState(false);
+  const LIMIT = 8;
+  const shown = showAll ? depts : depts.slice(0, LIMIT);
 
   const answered = agg.requested - agg.unanswered;
   const without = agg.counted - agg.credited;
@@ -62,12 +66,15 @@ export default function AnalyticsPage() {
         </Card>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_360px] gap-6 mt-6 items-stretch">
+      <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_360px] gap-6 mt-6 items-start">
         <Card className="!p-7">
-          <h2 className="text-[22px] font-semibold tracking-tight">Department comparison</h2>
+          <div className="flex items-baseline justify-between gap-4">
+            <h2 className="text-[22px] font-semibold tracking-tight">Department comparison</h2>
+            {depts.length > LIMIT && <span className="text-[12px]" style={{ color: C.muted }}>{showAll ? `All ${depts.length}` : `Top ${LIMIT} of ${depts.length}`}, highest first</span>}
+          </div>
           <div className="mt-7 space-y-5">
             {depts.length === 0 && <p className="text-[13px]" style={{ color: C.muted }}>No departments in this scope.</p>}
-            {depts.map(({ name, a }, i) => (
+            {shown.map(({ name, a }, i) => (
               <button key={name} onClick={() => go({ page: "teams", team: name })} className="w-full grid grid-cols-[170px_minmax(0,1fr)_48px] items-center gap-5 text-left rounded-lg hover:bg-[#F7F9F8] -mx-2 px-2 py-1 transition-colors">
                 <span className="text-[13px] truncate" style={{ color: C.text2 }}>{name}</span>
                 <GrowBar pct={a.pct ?? 0} color={C.brand} delay={i * 0.05} />
@@ -75,6 +82,12 @@ export default function AnalyticsPage() {
               </button>
             ))}
           </div>
+          {depts.length > LIMIT && (
+            <button onClick={() => setShowAll((v) => !v)} className="mt-5 inline-flex items-center gap-1.5 text-[13px] font-semibold rounded-md" style={{ color: C.primary }}>
+              {showAll ? "Show fewer" : `Show all ${depts.length} departments`}
+              <ChevronDown size={14} style={{ transform: showAll ? "rotate(180deg)" : undefined, transition: "transform .2s" }} />
+            </button>
+          )}
         </Card>
 
         <Card tone="tint" className="!p-7 flex flex-col">
@@ -85,7 +98,7 @@ export default function AnalyticsPage() {
             <li><span className="font-semibold" style={{ color: C.text }}>{n0(agg.wfaOverDays)}</span> WFA days above annual entitlement</li>
           </ul>
           <p className="text-[12px] mt-8 leading-relaxed" style={{ color: C.muted }}>These are attendance measures, not a measure of performance.</p>
-          <div className="mt-auto pt-5"><LinkButton onClick={() => go({ page: "attention" })}>Review exceptions <ArrowRight size={14} /></LinkButton></div>
+          <div className="pt-6"><LinkButton onClick={() => go({ page: "attention" })}>Review exceptions <ArrowRight size={14} /></LinkButton></div>
         </Card>
       </div>
     </>

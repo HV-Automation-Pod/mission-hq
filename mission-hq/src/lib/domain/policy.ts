@@ -208,6 +208,12 @@ export function scorePeriod(
  * Day counts are fractional because of half days. Print `4` not `4.0`, and
  * `3.5` not `3.4999999999999996`.
  */
+/** A personal day count: whole or half days only, so 1.1 or 1.9 can never show. */
+export function fmtHalfDays(n: number): string {
+  const r = Math.round(n * 2) / 2;
+  return Number.isInteger(r) ? String(r) : r.toFixed(1);
+}
+
 export function fmtDays(n: number): string {
   const rounded = Math.round(n * 10) / 10;
   return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
