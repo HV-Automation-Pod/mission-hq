@@ -17,6 +17,7 @@ import LoadingScreen from "@/components/LoadingScreen";
 import Tooltip from "@/components/Tooltip";
 import AccountMenu from "@/components/AccountMenu";
 import MyAttendance from "@/components/MyAttendance";
+import ViewSwitch from "@/components/ViewSwitch";
 import {
   MapPin, BarChart3, Users, ShieldCheck, Download, Sun, Moon, TrendingUp,
   RefreshCw, AlertCircle, Clock, AlertTriangle, Search, X, Command,
@@ -125,6 +126,23 @@ export default function Dashboard() {
   const [statusOptions, setStatusOptions] = useState<{ value: string; status: string }[]>([]);
   const [holidays, setHolidays] = useState<{ day: string; name: string; kind: "closed" | "optional" }[]>([]);
   const isAdmin = viewer?.role === "admin";
+  // An admin can look at their own attendance like anybody else. Kept in the
+  // URL (?view=me) so a refresh or a shared link lands where it was left.
+  const [myView, setMyView] = useState(() => {
+    if (typeof window === "undefined") return false;
+    return new URLSearchParams(window.location.search).get("view") === "me";
+  });
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (myView) params.set("view", "me"); else params.delete("view");
+    const qs = params.toString();
+    const next = `${window.location.pathname}${qs ? `?${qs}` : ""}${window.location.hash}`;
+    if (next !== `${window.location.pathname}${window.location.search}${window.location.hash}`) {
+      window.history.replaceState(null, "", next);
+    }
+  }, [myView]);
+  /** The single-page view: every member, and an admin who switched to it. */
+  const showMine = !!viewer && (!isAdmin || myView);
   // The payload already carries everyone the viewer may see, and a member's
   // copy holds exactly their own row, so this needs no extra request.
   const viewerName = useMemo(
@@ -196,11 +214,11 @@ export default function Dashboard() {
   // A member answers in Slack and comes back to check. The refresh button is
   // gone from their view, so refresh when the tab regains focus instead.
   useEffect(() => {
-    if (!viewer || isAdmin) return;
+    if (!showMine) return;
     const onVisible = () => { if (document.visibilityState === "visible") loadData(true); };
     document.addEventListener("visibilitychange", onVisible);
     return () => document.removeEventListener("visibilitychange", onVisible);
-  }, [viewer, isAdmin, loadData]);
+  }, [showMine, loadData]);
 
   const departments = useMemo(() => Array.from(new Set(employees.flatMap((e) => e.departments))).filter(Boolean).sort(), [employees]);
 
@@ -253,7 +271,7 @@ export default function Dashboard() {
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       // Members get the single-page view, which has no tabs, palette or export.
-      if (viewer && !isAdmin) return;
+      if (showMine) return;
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement || e.target instanceof HTMLTextAreaElement) return;
       if ((e.key === "k" && (e.metaKey || e.ctrlKey)) || e.key === "/") { e.preventDefault(); setCmdOpen(true); return; }
       if (e.key === "1") switchTab("overview");
@@ -269,7 +287,7 @@ export default function Dashboard() {
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [loadData, toggleTheme, handleExport, switchTab, isAdmin, viewer]);
+  }, [loadData, toggleTheme, handleExport, switchTab, isAdmin, showMine]);
 
   const todayCounts = useMemo(() => {
     let office = 0, pending = 0;
@@ -315,8 +333,11 @@ export default function Dashboard() {
   }
 
   // ─── Member: one page, their own data ─────────────────
-  if (viewer && !isAdmin) {
-    return <MyAttendance employee={employees.find((e) => e.email === viewer.email) ?? employees[0] ?? null}
+  if (viewer && showMine) {
+    // No fallback to "the first row": for an admin that would be somebody
+    // else's attendance. A member's payload is one row, an admin's is everyone's.
+    return <MyAttendance employee={employees.find((e) => e.email === viewer.email) ?? null}
+      onBackToAdmin={isAdmin ? () => setMyView(false) : undefined}
       dates={dates} viewer={viewer} options={statusOptions} holidays={holidays} onChanged={() => loadData(true)} />;
   }
 
@@ -365,6 +386,7 @@ export default function Dashboard() {
 
           {/* Actions */}
           <div className="flex items-center gap-1.5">
+            {isAdmin && <div className="mr-2"><ViewSwitch view="team" onChange={(v) => setMyView(v === "me")} /></div>}
             {lastUpdated && (
               <div className="hidden md:flex items-center gap-1.5 text-[11px] mr-2" style={{ color: "var(--text-muted)" }}>
                 <Clock size={11} />

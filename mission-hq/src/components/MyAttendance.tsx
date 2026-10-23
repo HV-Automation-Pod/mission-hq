@@ -6,6 +6,7 @@ import {
   AlertCircle, ArrowLeftRight, Building2, CalendarDays, Check, ChevronLeft, ChevronRight, Flame, Globe, Home, MapPin, Moon, Pencil, Plane, Sun, TreePalm, X, type LucideIcon,
 } from "lucide-react";
 import AccountMenu from "@/components/AccountMenu";
+import ViewSwitch from "@/components/ViewSwitch";
 import { useTheme } from "@/lib/theme";
 import { answerMyAttendance } from "@/lib/actions";
 import { calculateWeeklyCompliance } from "@/lib/utils";
@@ -114,12 +115,14 @@ function Heading({ children, right }: { children: React.ReactNode; right?: React
   );
 }
 
-export default function MyAttendance({ employee: loaded, dates, viewer, options, holidays, onChanged }: {
+export default function MyAttendance({ employee: loaded, dates, viewer, options, holidays, onChanged, onBackToAdmin }: {
   employee: Employee | null;
   dates: string[];
   viewer: { email: string; role: string };
   options: Option[];
   holidays: { day: string; name: string; kind: "closed" | "optional" }[];
+  /** Set for an admin looking at their own attendance: the way back. */
+  onBackToAdmin?: () => void;
   /** Re-fetch the payload after an answer is saved. */
   onChanged: () => Promise<void> | void;
 }) {
@@ -250,6 +253,7 @@ export default function MyAttendance({ employee: loaded, dates, viewer, options,
             <span className="text-[15px] font-bold tracking-tight" style={{ color: "var(--text-primary)" }}>MissionHQ</span>
           </div>
           <div className="flex items-center gap-1.5">
+            {onBackToAdmin && <div className="mr-1"><ViewSwitch view="me" onChange={(v) => v === "team" && onBackToAdmin()} /></div>}
             <button onClick={toggleTheme} aria-label={theme === "light" ? "Switch to dark mode" : "Switch to light mode"}
               className="p-2 rounded-lg transition-all active:scale-95 hover:bg-[var(--bg-surface-hover)]"
               style={{ color: "var(--text-secondary)" }}>

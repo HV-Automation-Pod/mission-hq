@@ -35,20 +35,18 @@ export async function GET(request: Request) {
   try {
     const db = requireDb();
     // The picker's options ride along, fetched in parallel, so opening it is
-    // instant instead of a server round trip. Members only: admins have no
-    // picker on this screen.
+    // instant instead of a server round trip. Admins get them too, for their
+    // own "My attendance" view.
     const [payload, options] = await Promise.all([
       db.rpc("dashboard_payload", {
         p_days: Number.isFinite(days) && days > 0 && days <= 1000 ? days : 90,
         p_email: viewer.role === "admin" ? null : viewer.email,
       }),
-      viewer.role === "admin"
-        ? Promise.resolve({ data: null })
-        : db.from("locations").select("value,status").eq("active", true).order("sort_order"),
+      db.from("locations").select("value,status").eq("active", true).order("sort_order"),
     ]);
     if (payload.error) throw new Error(payload.error.message);
 
-    const holidays = viewer.role === "admin" ? undefined : await upcomingHolidays();
+    const holidays = await upcomingHolidays();
 
     return NextResponse.json(
       { ...(payload.data as object), statusOptions: options.data ?? undefined, holidays, viewer: { email: viewer.email, role: viewer.role } },
