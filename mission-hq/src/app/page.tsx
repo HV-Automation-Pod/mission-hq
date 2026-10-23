@@ -319,7 +319,9 @@ export default function Dashboard() {
   ];
 
   // ─── Loading: Mission Control acquiring signal ─────────
-  if (!mounted || loading) return roleHint === "admin" ? <LoadingScreen /> : <MemberLoading />;
+  // An admin who is opening their own member view (?view=me) is loading THAT
+  // screen, so the address outranks the remembered role.
+  if (!mounted || loading) return roleHint === "admin" && !myView ? <LoadingScreen /> : <MemberLoading />;
 
   // ─── Error ────────────────────────────────────────────
   if (error) {
