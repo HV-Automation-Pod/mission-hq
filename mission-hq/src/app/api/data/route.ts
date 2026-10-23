@@ -1,6 +1,6 @@
-import { NextResponse } from "next/server";
-import { publicDb, requireDb } from "@/lib/db";
-import { getViewer } from "@/lib/session";
+import { publicDb, requireDb } from "@/lib/server/db";
+import { getViewer } from "@/lib/server/session";
+import { fail, messageOf, ok } from "@/lib/server/respond";
 
 /**
  * The dashboard's data, straight from Postgres, scoped to who is asking.
@@ -20,10 +20,7 @@ export const dynamic = "force-dynamic";
 export async function GET(request: Request) {
   const viewer = await getViewer();
   if (!viewer) {
-    return NextResponse.json(
-      { success: false, error: "Sign in with your HyperVerge account" },
-      { status: 401 },
-    );
+    return fail(401, "Sign in with your HyperVerge account");
   }
 
   // 90 days by default, not the full history. Everything on first paint — the
@@ -48,15 +45,16 @@ export async function GET(request: Request) {
 
     const holidays = await upcomingHolidays();
 
-    return NextResponse.json(
-      { ...(payload.data as object), statusOptions: options.data ?? undefined, holidays, viewer: { email: viewer.email, role: viewer.role } },
-      // Attendance changes all morning; a cached copy is worse than a slow one.
-      // `private` matters more than usual here: the payload differs per viewer.
-      { headers: { "cache-control": "private, no-store" } },
-    );
+    // Attendance changes all morning; a cached copy is worse than a slow one,
+    // and `respond.ts` never lets one be stored: the payload differs per viewer.
+    return ok({
+      ...(payload.data as object),
+      statusOptions: options.data ?? undefined,
+      holidays,
+      viewer: { email: viewer.email, role: viewer.role, canEdit: viewer.canEdit },
+    });
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Unknown error";
-    return NextResponse.json({ success: false, error: message }, { status: 500 });
+    return fail(500, messageOf(err, "Unknown error"));
   }
 }
 

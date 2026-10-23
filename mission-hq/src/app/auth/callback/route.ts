@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { supabaseServer } from "@/lib/session";
+import { supabaseServer } from "@/lib/server/session";
 
 /**
  * Exchanges the OAuth code for a session cookie.
