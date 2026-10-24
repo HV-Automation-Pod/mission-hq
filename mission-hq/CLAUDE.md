@@ -344,24 +344,45 @@ which then counts as "asked and ignored" in their denominator.
 
 ## Deployment — every one of these cost a real outage
 
-**The Vercel project is `mission-hq`, NOT `mission-hq-dashboard`.**
-It lives under the `satishb0369s-projects` scope and it owns the production
-domain `mission-hq-dashboard.vercel.app`. The name mismatch is the trap: there
-are two other projects called `mission-hq-dashboard` (one under
-`hyperverge-academy`, one created by accident in the personal scope) and
-NEITHER serves the live site. Environment variables were once added to the
-wrong one of those and nothing changed, because the wrong project has no
-traffic. **Confirm by the domain, not the name:**
+**The Vercel project is `mission-hq`, NOT `mission-hq-dashboard`, and it lives
+under the `hv-one` team (Pro) — not `satishb0369s-projects` any more.**
+This section said `satishb0369s-projects` until 24 Oct 2026, confirmed wrong
+during a security review: that scope now shows **zero projects**
+(`vercel project ls --scope satishb0369s-projects`), because both WeCare
+repos were migrated to `hv-one` (Satish, in `#permissions`, 22 Oct 2026 —
+"Both projects have been migrated to the `hv-one` vercel org"). The local
+`.vercel/project.json` was still pointing at the dead project from before the
+migration, so `vercel firewall overview` and friends failed with *"Your
+Project was either deleted, transferred to a new Team, or you don't have
+access to it anymore"* — a true statement, just not one that names where it
+went. A stale link like that is silent until you run a command that needs
+live project state; `vercel deploy` alone won't surface it the same way.
+
+There are still two other projects called `mission-hq-dashboard` out there
+(one under `hyperverge-academy`, one created by accident in a personal scope)
+and NEITHER serves the live site — that part of the trap is unchanged, it has
+just moved teams. **Confirm by the live deployment, not the name or
+`vercel domains ls`** — the latter only lists *custom* domains, and
+`mission-hq-dashboard.vercel.app` is a project-assigned `.vercel.app`
+subdomain, so it never appears there even for the correct project (this
+section used to say `vercel domains ls` was the confirmation; it was never
+enough, since that command came back empty for both the real project and the
+dead one, and that is what made the dead link look merely "not deployed yet"
+instead of properly wrong):
 
 ```bash
-vercel link --yes --project mission-hq     # from the REPO ROOT, see below
-vercel domains ls                          # must list mission-hq-dashboard.vercel.app
+vercel link --yes --project mission-hq --scope hv-one   # from the REPO ROOT, see below
+vercel inspect https://mission-hq-dashboard.vercel.app --scope hv-one
+# must resolve to a deployment named "mission-hq", status Ready
 ```
 
 **`vercel link --yes` CREATES a project when the name is not found in scope.**
-It does not fail. That is how the stray empty project came to exist. If a link
-succeeds but `vercel domains ls` and `vercel ls` are both empty, you are linked
-to something new rather than to the real thing.
+It does not fail. That is how the stray empty project came to exist. Passing
+`--scope hv-one` explicitly, as above, is what keeps a link from silently
+creating (or finding) the wrong thing when the ambient/default scope is some
+other account. If a link succeeds but `vercel inspect` on the live URL 404s
+under that scope, you are linked to something new rather than to the real
+thing.
 
 **Deploy from the REPO ROOT, not from `mission-hq/`.** The project's Root
 Directory setting is `mission-hq`, so Vercel appends it to wherever you deploy
