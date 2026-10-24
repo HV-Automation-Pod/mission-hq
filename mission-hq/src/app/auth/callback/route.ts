@@ -11,14 +11,23 @@ import { supabaseServer } from "@/lib/server/session";
 export async function GET(request: NextRequest) {
   const { searchParams, origin } = request.nextUrl;
   const code = searchParams.get("code");
-  const raw = searchParams.get("next") || "/";
+  let raw = "/";
+  try {
+    raw = decodeURIComponent(request.cookies.get("hq_next")?.value ?? "/") || "/";
+  } catch {}
   const next = raw.startsWith("/") && !raw.startsWith("//") ? raw : "/";
 
-  if (!code) return NextResponse.redirect(`${origin}/login`);
+  const done = (url: string) => {
+    const res = NextResponse.redirect(url);
+    res.cookies.set("hq_next", "", { path: "/auth/callback", maxAge: 0 });
+    return res;
+  };
+
+  if (!code) return done(`${origin}/login`);
 
   const supabase = await supabaseServer();
   const { error } = await supabase.auth.exchangeCodeForSession(code);
-  if (error) return NextResponse.redirect(`${origin}/login?error=${encodeURIComponent(error.message)}`);
+  if (error) return done(`${origin}/login?error=${encodeURIComponent(error.message)}`);
 
-  return NextResponse.redirect(`${origin}${next}`);
+  return done(`${origin}${next}`);
 }

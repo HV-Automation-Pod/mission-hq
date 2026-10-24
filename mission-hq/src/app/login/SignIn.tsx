@@ -17,10 +17,14 @@ export function SignIn({ next, variant }: { next?: string; variant: "primary" | 
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
       process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
     );
+    // The return path rides in a short-lived cookie, not a query string, so
+    // redirectTo is the bare callback URL and matches the Supabase allow list
+    // exactly (no wildcard needed). The callback re-validates it.
+    document.cookie = `hq_next=${encodeURIComponent(next || "/")}; path=/auth/callback; max-age=600; samesite=lax${location.protocol === "https:" ? "; secure" : ""}`;
     await supabase.auth.signInWithOAuth({
       provider: "google",
       options: {
-        redirectTo: `${location.origin}/auth/callback?next=${encodeURIComponent(next || "/")}`,
+        redirectTo: `${location.origin}/auth/callback`,
         // Narrows the Google account chooser to the company, which is a
         // convenience and NOT a security control: the real check is the
         // allowlist on the server.
