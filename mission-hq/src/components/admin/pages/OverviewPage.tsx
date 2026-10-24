@@ -25,6 +25,8 @@ export default function OverviewPage() {
   const scope = useScope(day);
   const { agg, rows, period } = scope;
   const isToday = day === today;
+  const weekend = [0, 6].includes(parseISO(day).getDay());
+  const dayName = format(parseISO(day), "EEEE");
 
   // Only days that have data can be chosen: weekends, holidays and anything
   // before the loaded window are drawn muted in the calendar.
@@ -59,17 +61,34 @@ export default function OverviewPage() {
             isDisabled={(d) => !loaded.has(d)} onChange={(v) => setFilter({ day: v === today ? null : v })}
             display={day === today ? `Today \u00b7 ${format(parseISO(day), "d MMMM")}` : format(parseISO(day), "EEE d MMMM yyyy")} />} />
 
+      {weekend && (
+        <Card tone="tint" className="!p-6 mb-4">
+          <div className="text-[16px] font-semibold">{isToday ? `Today is a weekend (${dayName})` : `${dayName} was a weekend`}</div>
+          <p className="text-[13px] mt-1" style={{ color: C.text2 }}>
+            No check-ins are requested on weekends, so there is nothing to record. The next check-in goes out on the next working day.
+          </p>
+        </Card>
+      )}
+
       <Stagger className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <Item><Kpi label="People in scope" numeric={agg.people} sub={`${agg.asked} asked ${isToday ? "today" : "that day"} · ${agg.notPrompted} not prompted`} onClick={() => go({ page: "people" })} /></Item>
+        <Item><Kpi label="People in scope" numeric={agg.people} sub={weekend ? "Weekend, no check-ins requested" : `${agg.asked} asked ${isToday ? "today" : "that day"} · ${agg.notPrompted} not prompted`} onClick={() => go({ page: "people" })} /></Item>
         <Item><Kpi label={isToday ? "Recorded today" : "Recorded"} onClick={() => go({ page: "people" })}
           valueNode={<><CountUp value={agg.recorded} /> <span style={{ color: C.muted, fontWeight: 500 }}>/ {agg.asked}</span></>}
-          sub={agg.asked ? `${Math.round((agg.recorded / agg.asked) * 100)}% response coverage` : "Nobody was asked"} /></Item>
-        <Item><Kpi label="Still waiting" numeric={agg.waiting} tone={agg.waiting > 0 ? "warn" : undefined} sub={isToday ? "Today’s check-in is unanswered" : "Unanswered that day"} onClick={() => go({ page: "attention", attention: "waiting" })} /></Item>
+          sub={agg.asked ? `${Math.round((agg.recorded / agg.asked) * 100)}% response coverage` : weekend ? "Weekend" : "Nobody was asked"} /></Item>
+        <Item><Kpi label="Still waiting" numeric={agg.waiting} tone={agg.waiting > 0 ? "warn" : undefined} sub={weekend ? "Weekend" : isToday ? "Today’s check-in is unanswered" : "Unanswered that day"} onClick={() => go({ page: "attention", attention: "waiting" })} /></Item>
         <Item><Kpi label={monthName} valueNode={agg.pct === null ? "n/a" : <><CountUp value={agg.pct} />%</>}
           sub={agg.pct === null ? "No counted days in this period" : `${Math.round(agg.credited).toLocaleString()} of ${Math.round(agg.counted).toLocaleString()} counted days`} onClick={() => go({ page: "analytics" })} /></Item>
       </Stagger>
 
       <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_360px] gap-6 mt-6 items-stretch">
+        {weekend ? (
+        <Card className="!p-7">
+          <h2 className="text-[22px] font-semibold tracking-tight">Where people are working</h2>
+          <p className="text-[15px] mt-6" style={{ color: C.text2 }}>
+            {isToday ? "Today is a weekend" : `${dayName} was a weekend`}. Nobody is asked where they are working, so there is no breakdown to show.
+          </p>
+        </Card>
+        ) : (
         <Card className="!p-7">
           <h2 className="text-[22px] font-semibold tracking-tight">Where people are working</h2>
           <p className="text-[13px] mt-2" style={{ color: C.muted }}>
@@ -103,6 +122,7 @@ export default function OverviewPage() {
             {agg.notPrompted} {agg.notPrompted === 1 ? "person was" : "people were"} not prompted; they are not counted as missing.
           </div>
         </Card>
+        )}
 
         <Card tone="tint" className="!p-7 flex flex-col">
           <h2 className="text-[22px] font-semibold tracking-tight">Start here</h2>
@@ -122,6 +142,13 @@ export default function OverviewPage() {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_360px] gap-6 mt-6 items-stretch">
+        {weekend ? (
+        <Card className="!p-7">
+          <h2 className="text-[22px] font-semibold tracking-tight">Department snapshot</h2>
+          <p className="text-[15px] mt-6" style={{ color: C.text2 }}>No response coverage on a weekend.</p>
+          <div className="mt-7"><LinkButton onClick={() => go({ page: "teams" })}>Explore all departments <ArrowRight size={14} /></LinkButton></div>
+        </Card>
+        ) : (
         <Card className="!p-7">
           <h2 className="text-[22px] font-semibold tracking-tight">Department snapshot</h2>
           <p className="text-[13px] mt-2" style={{ color: C.muted }}>{isToday ? "Today’s" : "That day’s"} response coverage</p>
@@ -137,6 +164,7 @@ export default function OverviewPage() {
           </div>
           <div className="mt-7"><LinkButton onClick={() => go({ page: "teams" })}>Explore all departments <ArrowRight size={14} /></LinkButton></div>
         </Card>
+        )}
 
         <Card className="!p-7 flex flex-col">
           <h2 className="text-[22px] font-semibold tracking-tight">Operations</h2>
