@@ -26,9 +26,24 @@ const jetbrainsMono = JetBrains_Mono({
   display: "swap",
 });
 
+const siteUrl = process.env.VERCEL_PROJECT_PRODUCTION_URL
+  ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`
+  : "https://mission-hq-dashboard.vercel.app";
+const previewTitle = "MissionHQ Office Intelligence";
+const previewDescription = "Real-time office attendance tracking & compliance analytics";
+const previewImage = { url: "/brand/missionhq-mark-512.png", width: 512, height: 512, alt: "MissionHQ" };
+
 export const metadata: Metadata = {
-  title: "MissionHQ Office Intelligence",
-  description: "Real-time office attendance tracking & compliance analytics",
+  metadataBase: new URL(siteUrl),
+  title: previewTitle,
+  description: previewDescription,
+  openGraph: {
+    title: previewTitle,
+    description: previewDescription,
+    siteName: "MissionHQ",
+    type: "website",
+    images: [previewImage],
+  },
   applicationName: "MissionHQ",
   appleWebApp: { title: "MissionHQ", statusBarStyle: "black" },
 };
