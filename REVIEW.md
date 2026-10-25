@@ -279,6 +279,11 @@ curl -s -I https://mission-hq-dashboard.vercel.app/ | head -1
 
 - **That check covers `public` too.** WeCare's `public.employees` and `public.identity_links`
   carry the same people. Both must deny `anon`.
+- **Realtime is closed to `anon` too.** Project setting Realtime -> Settings -> "Allow public
+  access" stays OFF (public channels bypass RLS, so no migration can close them), and
+  `52_realtime_lockdown.sql` denies `anon` on `realtime.messages`. The app uses no Realtime;
+  adding any is 🔴 until it uses a private channel with a policy. Verify after any Realtime
+  change: `node scripts/check-realtime-anon.mjs` (exit 0 = refused).
 - **A new `grant ... to anon` is 🔴 and needs an explicit argument.** There is currently none,
   and that is the design.
 - **No Supabase storage object with `getPublicUrl()` may carry attendance data or a person's
