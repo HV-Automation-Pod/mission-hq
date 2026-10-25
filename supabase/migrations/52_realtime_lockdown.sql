@@ -25,8 +25,9 @@
 -- scripts/check-realtime-anon.mjs proves control 1 from outside. Run it after
 -- any change to Realtime settings.
 --
--- NON-DESTRUCTIVE: revokes a grant nobody holds on purpose and adds one
--- restrictive policy. No data, no existing policy touched. Idempotent.
+-- NON-DESTRUCTIVE: adds one restrictive policy. No data, no existing policy
+-- touched. Idempotent. It does not alter the table or its grants: the table is
+-- owned by Supabase (ALTER/REVOKE fail with 42501), and RLS is already on.
 --
 -- The project is shared with other apps. Nothing here grants anything, and a
 -- restrictive policy only ever narrows `anon`, so it cannot break a signed-in
@@ -38,10 +39,6 @@ begin
     raise notice 'realtime.messages not present; nothing to lock down';
     return;
   end if;
-
-  revoke all on table realtime.messages from anon;
-
-  alter table realtime.messages enable row level security;
 
   if not exists (
     select 1 from pg_policies
