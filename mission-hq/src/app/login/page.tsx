@@ -45,7 +45,11 @@ export default async function LoginPage({
   // different problem and needs a different instruction.
   const supabase = await supabaseServer();
   const { data } = await supabase.auth.getUser();
-  const wrongAccount = data.user?.email ?? null;
+  // Judged by the domain, not by getViewer() returning null: during an outage
+  // in the access check a company account would otherwise be told it is the
+  // wrong one.
+  const signedIn = data.user?.email?.toLowerCase() ?? null;
+  const wrongAccount = signedIn && !signedIn.endsWith("@hyperverge.co") ? signedIn : null;
   const host = (await headers()).get("host") ?? "";
 
   return (
