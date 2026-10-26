@@ -18,7 +18,14 @@ import { fail, messageOf, ok } from "@/lib/server/respond";
 export const dynamic = "force-dynamic";
 
 export async function GET(request: Request) {
-  const viewer = await getViewer();
+  // A failed access check is an outage: answer in the route's own shape
+  // rather than with Next's bare 500.
+  let viewer;
+  try {
+    viewer = await getViewer();
+  } catch {
+    return fail(503, "Could not check your access. Try again in a moment.");
+  }
   if (!viewer) {
     return fail(401, "Sign in with your HyperVerge account");
   }

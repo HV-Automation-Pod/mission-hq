@@ -108,10 +108,14 @@ export async function updateAdmin(email: string, canEdit: boolean, manageAccess:
       await refuseIfLastEditor("This is the last administrator who can edit. Make somebody else an editor first.");
     }
 
-    const { error } = await requireDb().from("dashboard_access")
+    // `.select()` returns the changed rows, so a row removed since the lookup
+    // reads as a failure instead of "Permission level updated".
+    const { data: changed, error } = await requireDb().from("dashboard_access")
       .update({ can_edit: canEdit, can_manage_access: manageAccess })
-      .eq("email", clean);
+      .eq("email", clean)
+      .select("email");
     if (error) throw new Error(error.message);
+    if (!changed?.length) throw new Error("That person no longer has admin access");
     revalidatePath("/admin/access");
   });
 }

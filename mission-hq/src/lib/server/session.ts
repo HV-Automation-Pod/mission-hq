@@ -69,7 +69,11 @@ export async function getViewer(): Promise<Viewer | null> {
     .select("can_edit, can_manage_access")
     .eq("email", email)
     .maybeSingle();
-  if (error) throw new Error(`Could not read admin access: ${error.message}`);
+  if (error) {
+    // The database's wording goes to the logs, not to the screen.
+    console.error("getViewer: dashboard_access lookup failed", error.message);
+    throw new Error("Could not check your access. Try again in a moment.");
+  }
 
   return row
     ? {

@@ -35,7 +35,9 @@ export default async function LoginPage({
   searchParams: Promise<{ next?: string; error?: string }>;
 }) {
   const { next, error } = await searchParams;
-  const viewer = await getViewer();
+  // An outage in the access check still shows the sign-in screen rather than
+  // an error page. Kept apart from redirect(), which works by throwing.
+  const viewer = await getViewer().catch(() => null);
   if (viewer) redirect(next || "/");
 
   // Anybody signed in with a non-company account. They are not "blocked from
