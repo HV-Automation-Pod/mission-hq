@@ -3,7 +3,7 @@
  * queries and is server-only, so the client cannot import its types at runtime;
  * these mirror it and are the only place the client reads them from.
  */
-export type Admin = { email: string; can_edit: boolean; note: string | null; added_by: string | null; created_at: string };
+export type Admin = { email: string; can_edit: boolean; can_manage_access: boolean; note: string | null; added_by: string | null; created_at: string };
 
 export type TriageRow = {
   email: string; slack_name: string | null; slack_user_id: string | null; in_mission_hq: boolean;
@@ -28,7 +28,7 @@ export type JobRow = { jobname: string; schedule: string; active: boolean };
 export type AdminData = {
   admins: Admin[]; triage: TriageRow[]; jobs: JobRow[]; people: Person[]; groups: Group[];
   slackSyncedAt: string | null;
-  viewer: { email: string; role: string; canEdit: boolean };
+  viewer: { email: string; role: string; canEdit: boolean; canManageAccess: boolean };
 };
 
 /** One attendance record as the correction flow needs to see it. */

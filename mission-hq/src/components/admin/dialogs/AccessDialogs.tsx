@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import { Search } from "lucide-react";
 import { C, Avatar, Button, FieldLabel, ModalHeader, Pill, TextInput, focusRing } from "@/components/ui";
-import { grantAdmin, revokeAdmin } from "@/lib/actions/access";
+import { grantAdmin, revokeAdmin, updateAdmin } from "@/lib/actions/access";
 import { useAdmin } from "../context";
 
 const LEVELS = [
@@ -11,14 +11,15 @@ const LEVELS = [
   { id: "editor", title: "Editor", body: "Can correct attendance, manage people and run operations." },
 ] as const;
 
-function LevelPicker({ value, onChange }: { value: "viewer" | "editor"; onChange: (v: "viewer" | "editor") => void }) {
+/** `locked`: only an editor may give or take away editing, so for anybody else the level is fixed. */
+function LevelPicker({ value, onChange, locked }: { value: "viewer" | "editor"; onChange: (v: "viewer" | "editor") => void; locked?: boolean }) {
   return (
     <div className="space-y-3" role="radiogroup" aria-label="Permission level">
       {LEVELS.map((l) => {
         const on = value === l.id;
         return (
-          <button key={l.id} type="button" role="radio" aria-checked={on} onClick={() => onChange(l.id)}
-            className={`w-full text-left rounded-2xl px-5 py-4 transition-colors ${focusRing}`} style={{ background: on ? C.selected : C.surface, border: `1.5px solid ${on ? C.primary : C.border}` }}>
+          <button key={l.id} type="button" role="radio" aria-checked={on} disabled={locked && !on} onClick={() => onChange(l.id)}
+            className={`w-full text-left rounded-2xl px-5 py-4 transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${focusRing}`} style={{ background: on ? C.selected : C.surface, border: `1.5px solid ${on ? C.primary : C.border}` }}>
             <div className="text-[17px] font-semibold">{l.title}</div>
             <div className="text-[13px] mt-2" style={{ color: C.text2 }}>{l.body}</div>
           </button>
@@ -28,12 +29,27 @@ function LevelPicker({ value, onChange }: { value: "viewer" | "editor"; onChange
   );
 }
 
+/** The workspace-admin switch: independent of the level, so it sits under it. */
+function ManageAccessToggle({ value, onChange }: { value: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <button type="button" role="checkbox" aria-checked={value} onClick={() => onChange(!value)}
+      className={`w-full text-left rounded-2xl px-5 py-4 mt-3 flex items-start gap-3 transition-colors ${focusRing}`} style={{ background: value ? C.selected : C.surface, border: `1.5px solid ${value ? C.primary : C.border}` }}>
+      <span aria-hidden className="mt-1 w-4 h-4 rounded shrink-0 flex items-center justify-center text-[11px]" style={{ border: `1.5px solid ${value ? C.primary : C.border}`, background: value ? C.primary : "transparent", color: "#fff" }}>{value ? "✓" : ""}</span>
+      <span>
+        <span className="block text-[17px] font-semibold">Workspace admin</span>
+        <span className="block text-[13px] mt-2" style={{ color: C.text2 }}>Can add and remove viewers and choose who else is a workspace admin. Does not allow editing records, or giving editing to anyone.</span>
+      </span>
+    </button>
+  );
+}
+
 /** "Grant admin access": pick a company account, a level, and say why. */
 export function GrantDialog({ onClose }: { onClose: () => void }) {
-  const { employees, people, admin, reloadAdmin, notify } = useAdmin();
+  const { employees, people, admin, viewer, reloadAdmin, notify } = useAdmin();
   const [q, setQ] = useState("");
   const [email, setEmail] = useState<string | null>(null);
   const [level, setLevel] = useState<"viewer" | "editor">("viewer");
+  const [manage, setManage] = useState(false);
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -51,17 +67,18 @@ export function GrantDialog({ onClose }: { onClose: () => void }) {
   // A typed company address is allowed even if it is in no list: the server is the check.
   const typed = needle.includes("@") && needle.endsWith("@hyperverge.co") ? needle : null;
   const chosen = email ?? typed;
+  const alreadyAdmin = chosen ? existing.has(chosen) : false;
 
   const grant = async () => {
     if (!chosen) return;
     setBusy(true); setError(null);
-    const r = await grantAdmin(chosen, level === "editor", note.trim() || undefined);
+    const r = await grantAdmin(chosen, level === "editor", note.trim() || undefined, manage);
     setBusy(false);
     if (!r.ok) { setError(r.error); return; }
     await reloadAdmin();
     // The grant is saved either way; the Slack heads-up is reported on its own.
-    if (r.notified === false && r.reason && r.reason !== "already had access") notify(`Access granted, but the Slack notification failed: ${String(r.reason)}`, "error");
-    else notify(r.reason === "already had access" ? "Permission level updated" : "Access granted");
+    if (r.notified === false && r.reason) notify(`Access granted, but the Slack notification failed: ${String(r.reason)}`, "error");
+    else notify("Access granted");
     onClose();
   };
 
@@ -92,17 +109,20 @@ export function GrantDialog({ onClose }: { onClose: () => void }) {
       </div>
 
       <h3 className="text-[20px] font-semibold tracking-tight mt-7 mb-4">Permission level</h3>
-      <LevelPicker value={level} onChange={setLevel} />
+      <LevelPicker value={level} onChange={setLevel} locked={!viewer.canEdit} />
+      {!viewer.canEdit && <p className="text-[12px] mt-3" style={{ color: C.muted }}>Only an editor can make somebody an editor.</p>}
+      <ManageAccessToggle value={manage} onChange={setManage} />
 
       <div className="mt-6">
         <TextInput label="Note" value={note} onChange={setNote} maxLength={200} placeholder="Why this person needs admin access" />
       </div>
       <p className="text-[12px] mt-4" style={{ color: C.muted }}>A new admin receives an access notification in Slack.</p>
+      {alreadyAdmin && <p className="text-[13px] mt-4" style={{ color: C.text2 }}>Already an admin. Use Manage access on their card to change their level.</p>}
       {error && <p role="alert" className="text-[13px] mt-4" style={{ color: C.bad }}>{error}</p>}
 
       <div className="flex items-center justify-between gap-4 mt-7">
         <Button variant="outline" onClick={onClose} disabled={busy}>Cancel</Button>
-        <Button className="min-w-[210px]" disabled={!chosen} loading={busy} onClick={grant}>Grant access</Button>
+        <Button className="min-w-[210px]" disabled={!chosen || alreadyAdmin} loading={busy} onClick={grant}>Grant access</Button>
       </div>
     </div>
   );
@@ -114,17 +134,21 @@ export function ManageAccessDialog({ email, onClose }: { email: string; onClose:
   const a = admin?.admins.find((x) => x.email === email);
   const name = employees.find((e) => e.email === email)?.name || admin?.people.find((p) => p.email === email)?.full_name || email;
   const [level, setLevel] = useState<"viewer" | "editor">(a?.can_edit ? "editor" : "viewer");
+  const [manage, setManage] = useState(a?.can_manage_access === true);
   const [busy, setBusy] = useState<"save" | "remove" | null>(null);
   const [confirmRemove, setConfirmRemove] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   if (!a) return <div><ModalHeader eyebrow="ADMINISTRATION" title="Manage access" onClose={onClose} /><p className="text-[13px]" style={{ color: C.text2 }}>That person no longer has admin access.</p></div>;
   const you = email === viewer.email;
-  const changed = (level === "editor") !== a.can_edit;
+  const changed = (level === "editor") !== a.can_edit || manage !== a.can_manage_access;
+  // Editing is given and taken away by editors only, and removing an editor takes it away.
+  const levelLocked = !viewer.canEdit;
+  const removeLocked = a.can_edit && !viewer.canEdit;
 
   const save = async () => {
     setBusy("save"); setError(null);
-    const r = await grantAdmin(email, level === "editor", a.note ?? undefined);
+    const r = await updateAdmin(email, level === "editor", manage);
     setBusy(null);
     if (!r.ok) { setError(r.error); return; }
     await reloadAdmin(); notify("Permission level updated"); onClose();
@@ -145,8 +169,10 @@ export function ManageAccessDialog({ email, onClose }: { email: string; onClose:
         <div><div className="text-[18px] font-semibold">{name}{you ? " · You" : ""}</div><div className="text-[12px] mt-1" style={{ color: C.muted }}>{email}</div></div>
       </div>
       <h3 className="text-[18px] font-semibold mt-7 mb-4">Permission level</h3>
-      <LevelPicker value={level} onChange={setLevel} />
-      {you && <p className="text-[12px] mt-4" style={{ color: C.muted }}>You cannot remove your own access, and at least one editor must remain.</p>}
+      <LevelPicker value={level} onChange={setLevel} locked={levelLocked} />
+      {levelLocked && <p className="text-[12px] mt-3" style={{ color: C.muted }}>Only an editor can give or take away editing{removeLocked ? ", or remove an editor" : ""}.</p>}
+      <ManageAccessToggle value={manage} onChange={setManage} />
+      {you && <p className="text-[12px] mt-4" style={{ color: C.muted }}>You cannot remove your own access or your own ability to manage it, and at least one editor must remain.</p>}
       {error && <p role="alert" className="text-[13px] mt-4" style={{ color: C.bad }}>{error}</p>}
 
       {confirmRemove ? (
@@ -157,7 +183,7 @@ export function ManageAccessDialog({ email, onClose }: { email: string; onClose:
         </div>
       ) : (
         <div className="flex items-center justify-between gap-4 mt-8">
-          <Button variant="ghost" style={{ color: C.bad }} disabled={you || busy !== null} onClick={() => setConfirmRemove(true)}>Remove access</Button>
+          <Button variant="ghost" style={{ color: C.bad }} disabled={you || removeLocked || busy !== null} onClick={() => setConfirmRemove(true)}>Remove access</Button>
           <div className="flex gap-3"><Button variant="outline" onClick={onClose} disabled={busy !== null}>Cancel</Button><Button disabled={!changed} loading={busy === "save"} onClick={save}>Save level</Button></div>
         </div>
       )}

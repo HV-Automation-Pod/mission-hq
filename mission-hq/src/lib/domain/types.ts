@@ -37,7 +37,7 @@ export interface ApiResponse {
   yearStart?: string;
   /** Who the server decided is asking. The payload is already scoped to them;
    *  this is for deciding what to draw, never for deciding what is allowed. */
-  viewer?: { email: string; role: string; canEdit?: boolean };
+  viewer?: { email: string; role: string; canEdit?: boolean; canManageAccess?: boolean };
   /** What the answer picker offers, from `locations`. Members only. */
   statusOptions?: { value: string; status: string }[];
   /** Next weekday holidays. `closed` = office shut; `optional` = restricted, taken per person. Members only. */

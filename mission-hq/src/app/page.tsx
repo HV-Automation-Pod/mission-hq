@@ -22,7 +22,7 @@ import { Button, C, PETROL_VARS, useLightOnly } from "@/components/ui";
  */
 const AUTO_REFRESH_INTERVAL = 5 * 60 * 1000;
 
-type Viewer = { email: string; role: string; canEdit?: boolean };
+type Viewer = { email: string; role: string; canEdit?: boolean; canManageAccess?: boolean };
 
 export default function Dashboard() {
   const [employees, setEmployees] = useState<Employee[]>([]);
@@ -125,7 +125,7 @@ export default function Dashboard() {
 
   // ─── Admin workspace ──────────────────────────────────
   return (
-    <AdminApp employees={employees} dates={dates} viewer={{ email: viewer.email, canEdit: viewer.canEdit === true }}
+    <AdminApp employees={employees} dates={dates} viewer={{ email: viewer.email, canEdit: viewer.canEdit === true, canManageAccess: viewer.canManageAccess === true }}
       statusOptions={statusOptions} lastUpdated={lastUpdated} refreshing={refreshing} onRefresh={() => loadData(true)}
       fullHistory={fullHistory} onLoadHistory={loadHistory} onMyView={() => setMyView(true)} />
   );

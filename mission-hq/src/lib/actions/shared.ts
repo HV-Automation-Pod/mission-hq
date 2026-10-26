@@ -53,6 +53,15 @@ export async function requireEditor() {
   return viewer;
 }
 
+/** Adding, changing and removing admins: editors, and workspace admins. */
+export async function requireAccessManager() {
+  const viewer = await getViewer();
+  if (!viewer) throw new Error("Not signed in");
+  if (viewer.role !== "admin") throw new Error("Admins only");
+  if (!viewer.canManageAccess) throw new Error("Managing access needs an editor or a workspace admin");
+  return viewer;
+}
+
 /** Today (or a day offset from it) in IST, as yyyy-MM-dd. */
 /** Today in IST. Vercel runs in UTC, and between 00:00 and 05:30 IST the UTC
  *  date is still yesterday, which would let a member answer "tomorrow". */

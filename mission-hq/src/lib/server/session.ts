@@ -12,6 +12,10 @@ import { requireDb } from "@/lib/server/db";
  *           and nothing else. This is most of the company.
  *   admin   on the allowlist. Sees everyone, and may edit if `can_edit`.
  *
+ * Managing the allowlist itself is `canManageAccess`: true for editors, and for
+ * a workspace admin (`can_manage_access`) who can let people in without being
+ * able to change anybody's attendance.
+ *
  * The domain check is what makes somebody a member: a Google account at this
  * company is proof of employment, which is all a member needs to be. It is NOT
  * proof that they should see 350 people's records, which is why admin is a
@@ -24,7 +28,7 @@ import { requireDb } from "@/lib/server/db";
 const ALLOWED_DOMAINS = ["hyperverge.co"];
 
 export type Role = "admin" | "member";
-export type Viewer = { email: string; role: Role; canEdit: boolean };
+export type Viewer = { email: string; role: Role; canEdit: boolean; canManageAccess: boolean };
 
 export async function supabaseServer() {
   const store = await cookies();
@@ -57,15 +61,26 @@ export async function getViewer(): Promise<Viewer | null> {
   const domain = email.split("@")[1];
   if (!ALLOWED_DOMAINS.includes(domain)) return null;
 
-  const { data: row } = await requireDb()
+  // A failed lookup is an outage, not "not an admin". Reading it as the latter
+  // quietly demotes every admin to a member (a missing column, a timeout), and
+  // the admin workspace just disappears with nothing to say why.
+  const { data: row, error } = await requireDb()
     .from("dashboard_access")
-    .select("can_edit")
+    .select("can_edit, can_manage_access")
     .eq("email", email)
     .maybeSingle();
+  if (error) {
+    // The database's wording goes to the logs, not to the screen.
+    console.error("getViewer: dashboard_access lookup failed", error.message);
+    throw new Error("Could not check your access. Try again in a moment.");
+  }
 
   return row
-    ? { email, role: "admin", canEdit: row.can_edit === true }
-    : { email, role: "member", canEdit: false };
+    ? {
+        email, role: "admin", canEdit: row.can_edit === true,
+        canManageAccess: row.can_edit === true || row.can_manage_access === true,
+      }
+    : { email, role: "member", canEdit: false, canManageAccess: false };
 }
 
 /** For pages that only admins may open. */

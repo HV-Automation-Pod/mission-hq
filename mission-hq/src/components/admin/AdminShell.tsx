@@ -34,7 +34,7 @@ export const CRUMB: Record<AdminPage, string> = {
   attention: "NEEDS ATTENTION", administration: "ADMINISTRATION",
 };
 
-export type Access = { canEdit: boolean } | "checking";
+export type Access = { canEdit: boolean; canManageAccess: boolean } | "checking";
 
 function NavItem({ id, label, Icon, active, onGo }: {
   id: AdminPage; label: string; Icon: LucideIcon; active: boolean; onGo?: (p: AdminPage) => void;
@@ -83,7 +83,9 @@ export function AdminShell({
 
   const permission = access === "checking" ? null : access.canEdit
     ? { title: "Can view and edit", sub: "All members · All past dates" }
-    : { title: "View only", sub: "All members · Editing needs an admin editor" };
+    : access.canManageAccess
+      ? { title: "View and manage access", sub: "All members · Can add and remove viewers" }
+      : { title: "View only", sub: "All members · Editing needs an admin editor" };
 
   return (
     <div className="min-h-dvh" style={PETROL_VARS}>
@@ -122,7 +124,7 @@ export function AdminShell({
             {name ? <Avatar name={name} size={36} /> : <span className="w-9 h-9 rounded-full po-shimmer" style={{ backgroundColor: "#E3EAE7" }} />}
             <div className="min-w-0 flex-1">
               {name ? <div className="text-[13px] font-medium truncate">{name}</div> : <span className="block h-3 w-24 rounded po-shimmer" style={{ backgroundColor: "#E3EAE7" }} />}
-              <div className="text-[11px]" style={{ color: C.muted }}>{access === "checking" ? "" : access.canEdit ? "Admin editor" : "Admin viewer"}</div>
+              <div className="text-[11px]" style={{ color: C.muted }}>{access === "checking" ? "" : access.canEdit ? "Admin editor" : access.canManageAccess ? "Workspace admin" : "Admin viewer"}</div>
             </div>
             {onSignOut && (
               <Tooltip label="Sign out" side="top">
