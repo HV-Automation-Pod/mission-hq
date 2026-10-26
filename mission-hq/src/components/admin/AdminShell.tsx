@@ -84,7 +84,7 @@ export function AdminShell({
   const permission = access === "checking" ? null : access.canEdit
     ? { title: "Can view and edit", sub: "All members · All past dates" }
     : access.canManageAccess
-      ? { title: "View and manage access", sub: "All members · Can add and change admins" }
+      ? { title: "View and manage access", sub: "All members · Can add and remove viewers" }
       : { title: "View only", sub: "All members · Editing needs an admin editor" };
 
   return (

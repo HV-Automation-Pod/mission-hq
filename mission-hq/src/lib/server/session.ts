@@ -61,11 +61,15 @@ export async function getViewer(): Promise<Viewer | null> {
   const domain = email.split("@")[1];
   if (!ALLOWED_DOMAINS.includes(domain)) return null;
 
-  const { data: row } = await requireDb()
+  // A failed lookup is an outage, not "not an admin". Reading it as the latter
+  // quietly demotes every admin to a member (a missing column, a timeout), and
+  // the admin workspace just disappears with nothing to say why.
+  const { data: row, error } = await requireDb()
     .from("dashboard_access")
     .select("can_edit, can_manage_access")
     .eq("email", email)
     .maybeSingle();
+  if (error) throw new Error(`Could not read admin access: ${error.message}`);
 
   return row
     ? {

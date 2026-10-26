@@ -19,7 +19,7 @@ import { slack } from "../_shared/slack.ts";
 type Body = {
   email: string;
   can_edit?: boolean;
-  /** Workspace admin: may add, change and remove admins. */
+  /** Workspace admin: may add and remove viewers, and manage workspace admins. */
   can_manage_access?: boolean;
   granted_by?: string;
   note?: string;
@@ -69,7 +69,7 @@ Deno.serve(async (request) => {
     ? "You can view everyone's attendance and make changes: exemptions, prompt overrides, site corrections and rosters."
     : "You can view everyone's attendance. Changes are left to editors, so nothing you do can alter a record.";
   const manages = body.can_manage_access === true
-    ? " As a workspace admin, you can also add, change and remove other admins."
+    ? " As a workspace admin, you can also add and remove viewers from the Access tab."
     : "";
 
   const lines = [

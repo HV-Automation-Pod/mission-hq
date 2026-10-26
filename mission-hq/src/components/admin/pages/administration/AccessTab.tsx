@@ -51,7 +51,7 @@ export default function AccessTab() {
 
       <Card tone="tint" className="mt-8 !p-7">
         <h2 className="text-[22px] font-semibold tracking-tight">Viewing and editing are separate permissions.</h2>
-        <p className="text-[13px] mt-4" style={{ color: C.text2 }}>Viewers can explore all attendance. Editors can correct days, manage people, change rosters and run operations. Workspace admins can add, change and remove admins without editing records; editors can too.</p>
+        <p className="text-[13px] mt-4" style={{ color: C.text2 }}>Viewers can explore all attendance. Editors can correct days, manage people, change rosters and run operations. Workspace admins can add and remove viewers without editing records. Giving or taking away editing stays with editors, who can also manage access.</p>
         <p className="text-[13px] mt-3" style={{ color: C.text2 }}>You cannot remove your own access. At least one editor must remain.</p>
       </Card>
     </>
