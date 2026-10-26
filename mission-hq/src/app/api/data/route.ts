@@ -51,7 +51,7 @@ export async function GET(request: Request) {
       ...(payload.data as object),
       statusOptions: options.data ?? undefined,
       holidays,
-      viewer: { email: viewer.email, role: viewer.role, canEdit: viewer.canEdit },
+      viewer: { email: viewer.email, role: viewer.role, canEdit: viewer.canEdit, canManageAccess: viewer.canManageAccess },
     });
   } catch (err) {
     return fail(500, messageOf(err, "Unknown error"));

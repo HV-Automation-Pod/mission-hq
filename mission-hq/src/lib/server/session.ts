@@ -12,6 +12,10 @@ import { requireDb } from "@/lib/server/db";
  *           and nothing else. This is most of the company.
  *   admin   on the allowlist. Sees everyone, and may edit if `can_edit`.
  *
+ * Managing the allowlist itself is `canManageAccess`: true for editors, and for
+ * a workspace admin (`can_manage_access`) who can let people in without being
+ * able to change anybody's attendance.
+ *
  * The domain check is what makes somebody a member: a Google account at this
  * company is proof of employment, which is all a member needs to be. It is NOT
  * proof that they should see 350 people's records, which is why admin is a
@@ -24,7 +28,7 @@ import { requireDb } from "@/lib/server/db";
 const ALLOWED_DOMAINS = ["hyperverge.co"];
 
 export type Role = "admin" | "member";
-export type Viewer = { email: string; role: Role; canEdit: boolean };
+export type Viewer = { email: string; role: Role; canEdit: boolean; canManageAccess: boolean };
 
 export async function supabaseServer() {
   const store = await cookies();
@@ -59,13 +63,16 @@ export async function getViewer(): Promise<Viewer | null> {
 
   const { data: row } = await requireDb()
     .from("dashboard_access")
-    .select("can_edit")
+    .select("can_edit, can_manage_access")
     .eq("email", email)
     .maybeSingle();
 
   return row
-    ? { email, role: "admin", canEdit: row.can_edit === true }
-    : { email, role: "member", canEdit: false };
+    ? {
+        email, role: "admin", canEdit: row.can_edit === true,
+        canManageAccess: row.can_edit === true || row.can_manage_access === true,
+      }
+    : { email, role: "member", canEdit: false, canManageAccess: false };
 }
 
 /** For pages that only admins may open. */

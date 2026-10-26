@@ -37,7 +37,7 @@ import OperationDialog from "./dialogs/OperationDialog";
 export default function AdminApp({ employees, dates, viewer, statusOptions, lastUpdated, refreshing, onRefresh, fullHistory, onLoadHistory, onMyView }: {
   employees: Employee[];
   dates: string[];
-  viewer: { email: string; canEdit: boolean };
+  viewer: { email: string; canEdit: boolean; canManageAccess: boolean };
   statusOptions: { value: string; status: string }[];
   lastUpdated: Date | null;
   refreshing: boolean;
@@ -79,7 +79,7 @@ export default function AdminApp({ employees, dates, viewer, statusOptions, last
   };
 
   const name = employees.find((e) => e.email === viewer.email)?.name || admin?.people.find((p) => p.email === viewer.email)?.full_name || viewer.email.split("@")[0];
-  const access: Access = { canEdit: viewer.canEdit };
+  const access: Access = { canEdit: viewer.canEdit, canManageAccess: viewer.canManageAccess };
 
   const memberName = route.member ? employees.find((e) => e.email === route.member)?.name || people.get(route.member)?.full_name || route.member : undefined;
   const crumbTail = route.page === "people" && route.member ? `${memberName}${route.settings ? " / SETTINGS" : ""}` : route.page === "teams" && route.team ? route.team : undefined;

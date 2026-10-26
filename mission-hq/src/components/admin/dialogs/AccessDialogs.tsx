@@ -28,12 +28,27 @@ function LevelPicker({ value, onChange }: { value: "viewer" | "editor"; onChange
   );
 }
 
+/** The workspace-admin switch: independent of the level, so it sits under it. */
+function ManageAccessToggle({ value, onChange }: { value: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <button type="button" role="checkbox" aria-checked={value} onClick={() => onChange(!value)}
+      className={`w-full text-left rounded-2xl px-5 py-4 mt-3 flex items-start gap-3 transition-colors ${focusRing}`} style={{ background: value ? C.selected : C.surface, border: `1.5px solid ${value ? C.primary : C.border}` }}>
+      <span aria-hidden className="mt-1 w-4 h-4 rounded shrink-0 flex items-center justify-center text-[11px]" style={{ border: `1.5px solid ${value ? C.primary : C.border}`, background: value ? C.primary : "transparent", color: "#fff" }}>{value ? "✓" : ""}</span>
+      <span>
+        <span className="block text-[17px] font-semibold">Workspace admin</span>
+        <span className="block text-[13px] mt-2" style={{ color: C.text2 }}>Can add, change and remove admins. Does not allow editing records on its own.</span>
+      </span>
+    </button>
+  );
+}
+
 /** "Grant admin access": pick a company account, a level, and say why. */
 export function GrantDialog({ onClose }: { onClose: () => void }) {
   const { employees, people, admin, reloadAdmin, notify } = useAdmin();
   const [q, setQ] = useState("");
   const [email, setEmail] = useState<string | null>(null);
   const [level, setLevel] = useState<"viewer" | "editor">("viewer");
+  const [manage, setManage] = useState(false);
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -55,7 +70,7 @@ export function GrantDialog({ onClose }: { onClose: () => void }) {
   const grant = async () => {
     if (!chosen) return;
     setBusy(true); setError(null);
-    const r = await grantAdmin(chosen, level === "editor", note.trim() || undefined);
+    const r = await grantAdmin(chosen, level === "editor", note.trim() || undefined, manage);
     setBusy(false);
     if (!r.ok) { setError(r.error); return; }
     await reloadAdmin();
@@ -93,6 +108,7 @@ export function GrantDialog({ onClose }: { onClose: () => void }) {
 
       <h3 className="text-[20px] font-semibold tracking-tight mt-7 mb-4">Permission level</h3>
       <LevelPicker value={level} onChange={setLevel} />
+      <ManageAccessToggle value={manage} onChange={setManage} />
 
       <div className="mt-6">
         <TextInput label="Note" value={note} onChange={setNote} maxLength={200} placeholder="Why this person needs admin access" />
@@ -114,17 +130,18 @@ export function ManageAccessDialog({ email, onClose }: { email: string; onClose:
   const a = admin?.admins.find((x) => x.email === email);
   const name = employees.find((e) => e.email === email)?.name || admin?.people.find((p) => p.email === email)?.full_name || email;
   const [level, setLevel] = useState<"viewer" | "editor">(a?.can_edit ? "editor" : "viewer");
+  const [manage, setManage] = useState(a?.can_manage_access === true);
   const [busy, setBusy] = useState<"save" | "remove" | null>(null);
   const [confirmRemove, setConfirmRemove] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   if (!a) return <div><ModalHeader eyebrow="ADMINISTRATION" title="Manage access" onClose={onClose} /><p className="text-[13px]" style={{ color: C.text2 }}>That person no longer has admin access.</p></div>;
   const you = email === viewer.email;
-  const changed = (level === "editor") !== a.can_edit;
+  const changed = (level === "editor") !== a.can_edit || manage !== a.can_manage_access;
 
   const save = async () => {
     setBusy("save"); setError(null);
-    const r = await grantAdmin(email, level === "editor", a.note ?? undefined);
+    const r = await grantAdmin(email, level === "editor", a.note ?? undefined, manage);
     setBusy(null);
     if (!r.ok) { setError(r.error); return; }
     await reloadAdmin(); notify("Permission level updated"); onClose();
@@ -146,7 +163,8 @@ export function ManageAccessDialog({ email, onClose }: { email: string; onClose:
       </div>
       <h3 className="text-[18px] font-semibold mt-7 mb-4">Permission level</h3>
       <LevelPicker value={level} onChange={setLevel} />
-      {you && <p className="text-[12px] mt-4" style={{ color: C.muted }}>You cannot remove your own access, and at least one editor must remain.</p>}
+      <ManageAccessToggle value={manage} onChange={setManage} />
+      {you && <p className="text-[12px] mt-4" style={{ color: C.muted }}>You cannot remove your own access or your own ability to manage it, and at least one editor must remain.</p>}
       {error && <p role="alert" className="text-[13px] mt-4" style={{ color: C.bad }}>{error}</p>}
 
       {confirmRemove ? (

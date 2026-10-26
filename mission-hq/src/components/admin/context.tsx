@@ -108,7 +108,7 @@ export type AdminCtx = {
   employees: Employee[];
   dates: string[];
   today: string;
-  viewer: { email: string; canEdit: boolean };
+  viewer: { email: string; canEdit: boolean; canManageAccess: boolean };
   /** The work locations an answer can be corrected to, from `locations`. */
   statusOptions: { value: string; status: string }[];
   admin: AdminData | null;

@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { headers } from "next/headers";
 import { requireDb } from "@/lib/server/db";
 import { getViewer } from "@/lib/server/session";
-import { attempt, invokeToken, requireEditor, type ActionResult } from "./shared";
+import { attempt, invokeToken, requireAccessManager, type ActionResult } from "./shared";
 
 /** Who may see everybody's attendance, and who may change it. */
 
@@ -14,22 +14,47 @@ import { attempt, invokeToken, requireEditor, type ActionResult } from "./shared
  * Admin is the right to see 350 people's attendance, so it is deliberately not
  * self-service and deliberately recorded: `added_by` means a grant can always
  * be traced to whoever made it.
+ *
+ * `manageAccess` makes them a workspace admin: they may add, change and remove
+ * admins, independently of whether they may edit records.
  */
-export async function grantAdmin(email: string, canEdit: boolean, note?: string): Promise<ActionResult> {
+export async function grantAdmin(
+  email: string, canEdit: boolean, note?: string, manageAccess = false,
+): Promise<ActionResult> {
   return attempt(async () => {
-    const viewer = await requireEditor();
+    const viewer = await requireAccessManager();
     const clean = email.trim().toLowerCase();
     if (!clean.endsWith("@hyperverge.co")) {
       throw new Error("Only HyperVerge accounts can be given admin access");
     }
+    // Same reasoning as refusing to remove yourself: nobody could undo it
+    // except through the SQL editor.
+    if (clean === viewer.email && !canEdit && !manageAccess) {
+      throw new Error("You cannot remove your own ability to manage access");
+    }
 
     // Was this person already an admin? A level change is not news worth a DM;
     // being handed access for the first time is.
-    const { data: existing } = await requireDb()
-      .from("dashboard_access").select("email").eq("email", clean).maybeSingle();
+    // A failed lookup must not read as "new": that would DM somebody whose
+    // level was only being changed. Unknown means no DM.
+    const { data: existing, error: lookupError } = await requireDb()
+      .from("dashboard_access").select("email, can_edit").eq("email", clean).maybeSingle();
+    if (lookupError) throw new Error(lookupError.message);
+
+    // Demoting the last editor leaves nobody able to correct a record. Removal
+    // has always refused this; a level change has to as well.
+    if (existing?.can_edit && !canEdit) {
+      const { count } = await requireDb()
+        .from("dashboard_access")
+        .select("email", { count: "exact", head: true })
+        .eq("can_edit", true);
+      if ((count ?? 0) <= 1) {
+        throw new Error("This is the last administrator who can edit. Make somebody else an editor first.");
+      }
+    }
 
     const { error } = await requireDb().from("dashboard_access").upsert(
-      { email: clean, can_edit: canEdit, note: note?.trim() || null, added_by: viewer.email },
+      { email: clean, can_edit: canEdit, can_manage_access: manageAccess, note: note?.trim() || null, added_by: viewer.email },
       { onConflict: "email" },
     );
     if (error) throw new Error(error.message);
@@ -40,7 +65,7 @@ export async function grantAdmin(email: string, canEdit: boolean, note?: string)
     // the caller believing it failed. The reason comes back so the screen can
     // say "granted, but we could not reach them on Slack".
     if (existing) return { granted: true, notified: false, reason: "already had access" };
-    return { granted: true, ...(await notifyAccessGranted(clean, canEdit, note)) };
+    return { granted: true, ...(await notifyAccessGranted(clean, canEdit, manageAccess, note)) };
   });
 }
 
@@ -51,7 +76,7 @@ export async function grantAdmin(email: string, canEdit: boolean, note?: string)
  * always points at wherever this is actually deployed rather than at a value
  * somebody has to remember to update.
  */
-async function notifyAccessGranted(email: string, canEdit: boolean, note?: string) {
+async function notifyAccessGranted(email: string, canEdit: boolean, manageAccess: boolean, note?: string) {
   const viewer = await getViewer();
   const base = process.env.NEXT_PUBLIC_SUPABASE_URL;
   if (!base) return { notified: false, reason: "Supabase is not configured" };
@@ -73,6 +98,7 @@ async function notifyAccessGranted(email: string, canEdit: boolean, note?: strin
       body: JSON.stringify({
         email,
         can_edit: canEdit,
+        can_manage_access: manageAccess,
         granted_by: viewer?.email,
         note: note?.trim() || undefined,
         dashboard_url: dashboardUrl,
@@ -93,7 +119,7 @@ async function notifyAccessGranted(email: string, canEdit: boolean, note?: strin
  */
 export async function revokeAdmin(email: string): Promise<ActionResult> {
   return attempt(async () => {
-    const viewer = await requireEditor();
+    const viewer = await requireAccessManager();
     const clean = email.trim().toLowerCase();
     // Locking yourself out leaves nobody able to let you back in except through
     // the SQL editor, which is the thing this screen exists to avoid.

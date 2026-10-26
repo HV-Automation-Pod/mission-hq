@@ -19,6 +19,8 @@ import { slack } from "../_shared/slack.ts";
 type Body = {
   email: string;
   can_edit?: boolean;
+  /** Workspace admin: may add, change and remove admins. */
+  can_manage_access?: boolean;
   granted_by?: string;
   note?: string;
   /** Where the dashboard actually is. The caller is serving it, so it knows. */
@@ -66,11 +68,14 @@ Deno.serve(async (request) => {
   const whatTheyCan = canEdit
     ? "You can view everyone's attendance and make changes: exemptions, prompt overrides, site corrections and rosters."
     : "You can view everyone's attendance. Changes are left to editors, so nothing you do can alter a record.";
+  const manages = body.can_manage_access === true
+    ? " As a workspace admin, you can also add, change and remove other admins."
+    : "";
 
   const lines = [
     `Hi ${name}, you now have admin access to the MissionHQ dashboard.`,
     "",
-    whatTheyCan,
+    whatTheyCan + manages,
   ];
   if (body.note?.trim()) lines.push("", `Reason given: ${body.note.trim()}`);
   if (grantedBy) lines.push("", `Granted by ${grantedBy}.`);
@@ -82,7 +87,7 @@ Deno.serve(async (request) => {
       type: "section",
       text: { type: "mrkdwn", text: `Hi ${name}, you now have *admin access* to the MissionHQ dashboard.` },
     },
-    { type: "section", text: { type: "mrkdwn", text: whatTheyCan } },
+    { type: "section", text: { type: "mrkdwn", text: whatTheyCan + manages } },
   ];
 
   const context: string[] = [];

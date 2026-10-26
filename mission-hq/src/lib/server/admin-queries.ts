@@ -1,7 +1,7 @@
 import "server-only";
 import { requireDb } from "@/lib/server/db";
 
-export type Admin = { email: string; can_edit: boolean; note: string | null; added_by: string | null; created_at: string };
+export type Admin = { email: string; can_edit: boolean; can_manage_access: boolean; note: string | null; added_by: string | null; created_at: string };
 
 export async function getAdmins(): Promise<Admin[]> {
   const { data, error } = await requireDb()
