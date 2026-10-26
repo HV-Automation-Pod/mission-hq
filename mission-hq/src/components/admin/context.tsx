@@ -16,7 +16,7 @@
  * decides what to DRAW; every action re-checks role and edit permission.
  */
 
-import { createContext, useCallback, useContext, useEffect, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { fetchAdminData } from "@/lib/api/admin";
 import type { Employee } from "@/lib/domain/types";
 import type { AdminData, Person } from "@/lib/domain/access-types";
@@ -146,27 +146,32 @@ export function useAdmin(): AdminCtx {
 /** The route, kept in step with the address bar. */
 export function useRouteState() {
   const [route, setRoute] = useState<Route>(readRoute);
+  // The address bar is written OUTSIDE the state updater. React runs updaters
+  // during render, and Next's router listens to pushState/replaceState, so
+  // writing the URL inside one updates the Router while AdminApp renders.
+  const current = useRef(route);
+  const commit = useCallback((next: Route, mode: "push" | "replace") => {
+    current.current = next;
+    setRoute(next);
+    writeRoute(next, mode);
+  }, []);
 
   useEffect(() => {
-    const onPop = () => setRoute(readRoute());
+    const onPop = () => { current.current = readRoute(); setRoute(current.current); };
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
   }, []);
 
   const go = useCallback((to: Partial<Route>) => {
-    setRoute((cur) => {
-      // Landing on a page starts it clean: a leftover member or team from the
-      // last page would open somebody's record when you only chose "People".
-      const next: Route = { ...cur, member: null, team: null, settings: false, day: null, ...to };
-      writeRoute(next, "push");
-      window.scrollTo({ top: 0 });
-      return next;
-    });
-  }, []);
+    // Landing on a page starts it clean: a leftover member or team from the
+    // last page would open somebody's record when you only chose "People".
+    commit({ ...current.current, member: null, team: null, settings: false, day: null, ...to }, "push");
+    window.scrollTo({ top: 0 });
+  }, [commit]);
 
   const setFilter = useCallback((to: Partial<Route>) => {
-    setRoute((cur) => { const next = { ...cur, ...to }; writeRoute(next, "replace"); return next; });
-  }, []);
+    commit({ ...current.current, ...to }, "replace");
+  }, [commit]);
 
   return { route, go, setFilter };
 }
