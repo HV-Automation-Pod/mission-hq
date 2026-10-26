@@ -17,6 +17,3 @@ alter table "mission-hq".dashboard_access
 
 comment on column "mission-hq".dashboard_access.can_manage_access is
   'May add, change and remove admins. Independent of can_edit; editors may too.';
-
--- Nobody is granted it here. This repo is public, so who holds the role is set
--- from the dashboard or the SQL editor, never in a migration.
