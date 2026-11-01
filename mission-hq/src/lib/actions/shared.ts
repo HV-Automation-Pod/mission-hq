@@ -105,7 +105,7 @@ export async function invokeToken(): Promise<string> {
  * from `settings`, so no new secret is needed. BEST EFFORT: the answer is
  * already saved, and whatever this misses the 19:30 Zoho run still sweeps up.
  */
-export async function syncAnswerElsewhere(email: string, day: string) {
+export async function syncAnswerElsewhere(email: string, day: string, correctedBy?: string) {
   try {
     const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
     const { data } = await requireDb().from("settings").select("value").eq("key", "edge_invoke_key").maybeSingle();
@@ -116,7 +116,7 @@ export async function syncAnswerElsewhere(email: string, day: string) {
     const response = await fetch(`${url}/functions/v1/mission-hq-answer-sync`, {
       method: "POST",
       headers: { authorization: `Bearer ${data.value}`, "content-type": "application/json" },
-      body: JSON.stringify({ email, day }),
+      body: JSON.stringify({ email, day, correctedBy }),
       signal: AbortSignal.timeout(25_000),
     });
     if (!response.ok) console.error(`answer sync failed: HTTP ${response.status} ${(await response.text()).slice(0, 200)}`);

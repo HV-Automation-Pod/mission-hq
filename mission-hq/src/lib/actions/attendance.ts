@@ -54,7 +54,7 @@ export async function getAttendanceRecord(email: string, day: string): Promise<A
  * After the response it hands the row to `mission-hq-answer-sync`, the same as a
  * member's own answer: the Slack message for that day is rewritten to the new
  * answer (if a DM was ever sent for it), Zoho is pushed, and today's Slack status
- * is set. All best effort. Saved here still does not mean synced, and the screen
+ * is set, and a thread reply under the DM names the admin who changed it (no reason). All best effort. Saved here still does not mean synced, and the screen
  * says so: a Zoho miss within 60 days is swept at 19:30, and an older day is
  * outside that window and is not sent at all.
  */
@@ -108,7 +108,7 @@ export async function correctAttendance(input: {
     if (eventError) console.error("correctAttendance: history not recorded:", eventError.message);
 
     revalidatePath("/");
-    after(() => syncAnswerElsewhere(email, input.day));
+    after(() => syncAnswerElsewhere(email, input.day, viewer.email));
     return {
       updatedAt: now, by: viewer.email, previous: current?.status ?? null,
       historyRecorded: !eventError,
