@@ -16,7 +16,7 @@ supabase/migrations/*.sql       The schema. "mission-hq" schema in the WeCare pr
 
 | | |
 |---|---|
-| Production dashboard | https://mission-hq-dashboard.vercel.app |
+| Production dashboard | https://hq.wecare.hyperverge.org |
 | Supabase project | WeCare (ref in `supabase/.temp/linked-project.json`, or Vercel env) |
 | Schema | `"mission-hq"` (quoted everywhere; the hyphen is not optional) |
 | Remote | `github.com/HV-Automation-Pod/mission-hq` - use `gh`, not `glab` |
@@ -236,9 +236,9 @@ rather than omitting it.
 **Check this against PRODUCTION, every review. The code being right is not the question.**
 
 ```bash
-curl -s -o /dev/null -w '%{http_code}\n' https://mission-hq-dashboard.vercel.app/api/data
-curl -s -o /dev/null -w '%{http_code}\n' https://mission-hq-dashboard.vercel.app/api/admin
-curl -s -I https://mission-hq-dashboard.vercel.app/ | head -1
+curl -s -o /dev/null -w '%{http_code}\n' https://hq.wecare.hyperverge.org/api/data
+curl -s -o /dev/null -w '%{http_code}\n' https://hq.wecare.hyperverge.org/api/admin
+curl -s -I https://hq.wecare.hyperverge.org/ | head -1
 ```
 
 - **Every one of those must redirect to `/login` or return 401/403 without a session cookie.**

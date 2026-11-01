@@ -418,7 +418,7 @@ vercel env add NEXT_PUBLIC_SUPABASE_ANON_KEY production \
 live URL every time. A signed-out request must never return data:
 
 ```bash
-curl -s -o /dev/null -w '%{http_code}\n' https://mission-hq-dashboard.vercel.app/api/data
+curl -s -o /dev/null -w '%{http_code}\n' https://hq.wecare.hyperverge.org/api/data
 # 307 (redirect to /login) = correct. 200 = a live disclosure. 500 = env vars missing.
 ```
 
