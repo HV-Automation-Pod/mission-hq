@@ -134,7 +134,10 @@ async function syncSlackMessage(
 
   // A single line, like the handler: a greedy match would grow the fact on every edit.
   const fact = existingText.match(/\*Fun Fact:\*[ \t]*([^\n]*)/)?.[1]?.trim();
-  const responseLine = `Thank you for your update! We received your response *${chosen.label}* for ${day}.`;
+  // An admin's correction must not read as the member's own thank-you.
+  const responseLine = correctedBy
+    ? `Your response for ${day} was updated by an admin to *${chosen.label}*.`
+    : `Thank you for your update! We received your response *${chosen.label}* for ${day}.`;
   const text = `${responseLine}${fact ? `\n\n*Fun Fact:* ${fact}` : ""}`;
 
   const result = await slack("chat.update", token, {
