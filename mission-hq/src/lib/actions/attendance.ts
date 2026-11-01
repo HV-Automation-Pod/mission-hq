@@ -1,9 +1,10 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { after } from "next/server";
 import { requireDb } from "@/lib/server/db";
 import { getViewer } from "@/lib/server/session";
-import { ActionError, attempt, istDay, type ActionResult } from "./shared";
+import { ActionError, attempt, istDay, syncAnswerElsewhere, type ActionResult } from "./shared";
 
 /** An admin reading and correcting one person's record. */
 
@@ -50,9 +51,12 @@ export async function getAttendanceRecord(email: string, day: string): Promise<A
  *   - the member's `answered_at` is left alone: when THEY answered and when an
  *     admin changed it are different facts.
  *
- * It does not push to Zoho or touch Slack. Saved here does not mean synced, and
- * the screen says so: a correction within 60 days is swept to Zoho at 19:30,
- * and an older one is outside that window and is not sent at all.
+ * After the response it hands the row to `mission-hq-answer-sync`, the same as a
+ * member's own answer: the Slack message for that day is rewritten to the new
+ * answer (if a DM was ever sent for it), Zoho is pushed, and today's Slack status
+ * is set, and a thread reply under the DM names the admin who changed it (no reason). All best effort. Saved here still does not mean synced, and the screen
+ * says so: a Zoho miss within 60 days is swept at 19:30, and an older day is
+ * outside that window and is not sent at all.
  */
 export async function correctAttendance(input: {
   email: string; day: string; status: string; reason: string; expectedUpdatedAt: string | null;
@@ -104,6 +108,7 @@ export async function correctAttendance(input: {
     if (eventError) console.error("correctAttendance: history not recorded:", eventError.message);
 
     revalidatePath("/");
+    after(() => syncAnswerElsewhere(email, input.day, viewer.email));
     return {
       updatedAt: now, by: viewer.email, previous: current?.status ?? null,
       historyRecorded: !eventError,

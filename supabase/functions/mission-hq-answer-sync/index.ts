@@ -19,6 +19,9 @@
 // 3.2): anything Zoho misses stays in `zoho_push_queue` and the 19:30 run
 // reports it once, with a count.
 //
+// A CORRECTION BY AN ADMIN also posts one thread reply under that message saying
+// who changed it (their name, never a reason). Only when a message exists.
+//
 // SLACK IS TOUCHED ONLY IF THERE IS SOMETHING TO TOUCH. The row records the DM
 // it came from (`slack_channel`, `message_ts`). No DM recorded means no DM was
 // sent, and none is sent now: this edits a message, it never creates one.
@@ -94,6 +97,7 @@ async function syncSlackMessage(
   email: string,
   day: string,
   locations: Location[],
+  correctedBy: string | null,
 ): Promise<string> {
   if (!row.slack_channel || !row.message_ts) return "no Slack message was sent, nothing to update";
 
@@ -130,7 +134,10 @@ async function syncSlackMessage(
 
   // A single line, like the handler: a greedy match would grow the fact on every edit.
   const fact = existingText.match(/\*Fun Fact:\*[ \t]*([^\n]*)/)?.[1]?.trim();
-  const responseLine = `Thank you for your update! We received your response *${chosen.label}* for ${day}.`;
+  // An admin's correction must not read as the member's own thank-you.
+  const responseLine = correctedBy
+    ? `Your response for ${day} was updated by an admin to *${chosen.label}*.`
+    : `Thank you for your update! We received your response *${chosen.label}* for ${day}.`;
   const text = `${responseLine}${fact ? `\n\n*Fun Fact:* ${fact}` : ""}`;
 
   const result = await slack("chat.update", token, {
@@ -150,7 +157,31 @@ async function syncSlackMessage(
       },
     ],
   });
-  return result.ok ? "updated" : `failed: ${result.error}`;
+  if (!result.ok) return `failed: ${result.error}`;
+
+  // An admin changed it: tell the person, in the thread, who. No reason is
+  // included on purpose. Best effort; the message itself is already updated.
+  if (correctedBy) {
+    try {
+      const name = await adminName(correctedBy);
+      const note = await slack("chat.postMessage", token, {
+        channel: row.slack_channel,
+        thread_ts: row.message_ts,
+        text: `Your attendance for ${day} was updated to *${chosen.label}* by ${name}.`,
+      });
+      if (!note.ok) return `updated, thread note failed: ${note.error}`;
+    } catch (e) {
+      return `updated, thread note failed: ${errText(e)}`;
+    }
+  }
+  return "updated";
+}
+
+async function adminName(email: string): Promise<string> {
+  const rows = await pg(
+    `employees?select=full_name&email=eq.${encodeURIComponent(email)}&limit=1`,
+  ) as Array<{ full_name: string | null }>;
+  return rows?.[0]?.full_name?.trim() || email;
 }
 
 // ── The Slack profile status ────────────────────────────────────────────────
@@ -179,7 +210,7 @@ Deno.serve(async (request) => {
   const denied = await denyUnlessScheduler(request);
   if (denied) return denied;
 
-  let input: { email?: unknown; day?: unknown };
+  let input: { email?: unknown; day?: unknown; correctedBy?: unknown };
   try {
     input = await request.json();
   } catch {
@@ -187,6 +218,7 @@ Deno.serve(async (request) => {
   }
   const email = String(input.email ?? "").trim().toLowerCase();
   const day = String(input.day ?? "");
+  const correctedBy = String(input.correctedBy ?? "").trim().toLowerCase() || null;
   if (!/^[^@\s]+@[^@\s]+$/.test(email) || !/^\d{4}-\d{2}-\d{2}$/.test(day)) {
     return json({ ok: false, error: "email and day (yyyy-MM-dd) are required" }, 400);
   }
@@ -207,7 +239,7 @@ Deno.serve(async (request) => {
     };
     const [zoho, slackMessage, slackStatus] = await Promise.all([
       settle(() => syncZoho(email, day)),
-      settle(() => syncSlackMessage(row, email, day, locations)),
+      settle(() => syncSlackMessage(row, email, day, locations, correctedBy)),
       settle(() => syncSlackStatus(email, day, row.status, locations)),
     ]);
 

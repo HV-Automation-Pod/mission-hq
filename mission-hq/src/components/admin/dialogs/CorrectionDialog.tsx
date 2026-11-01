@@ -265,8 +265,8 @@ export default function CorrectionDialog({ initialEmail, initialDay, onClose }: 
           </div>
 
           <div className="rounded-2xl p-5 mt-6 text-[13px] leading-relaxed" style={{ background: C.inset, border: `1px solid ${C.border}`, color: C.text2 }}>
-            Saved here does not mean synced to Zoho.<br />
-            {result.withinZohoWindow ? "This correction is within the 60-day window and will be sent at the 19:30 IST run. Check the push status on the person’s profile." : "This date is outside the 60-day sync window, so it will not be sent to Zoho automatically."}
+            Saved here does not mean synced.<br />
+            {result.withinZohoWindow ? "Zoho is updated right away, and the 19:30 IST run retries if that fails. If Slack sent this person a message for that day, it is updated and a note names you in its thread. Check the push status on the person’s profile." : "This date is outside the 60-day sync window, so it will not be sent to Zoho automatically. Slack is still updated if a message was sent for that day."}
           </div>
           <Button className="w-full mt-6" onClick={() => { onClose(); openMember(member.email, day); notify("Correction saved"); }}>Back to member profile</Button>
         </>
