@@ -97,6 +97,7 @@ export default function MemberPage() {
 
   return (
     <>
+      <button onClick={() => go({ page: "people" })} className="mb-6 inline-flex items-center gap-2 text-[13px] font-medium" style={{ color: C.primary }}><ChevronLeft size={15} /> All people</button>
       <PageHeading title={name}
         sub={`${employee.department || "No department"} · ${siteOf(person)} · ${email} · ${person?.exited_at ? "Exited" : "Active employee"}`} />
 

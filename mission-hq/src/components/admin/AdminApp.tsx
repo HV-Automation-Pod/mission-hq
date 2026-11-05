@@ -7,7 +7,7 @@ import { C, Button, Modal, pageMotion } from "@/components/ui";
 import { istToday } from "@/lib/format";
 import type { Employee } from "@/lib/domain/types";
 import type { Person } from "@/lib/domain/access-types";
-import { AdminProvider, useAdminData, useRouteState, type AdminCtx, type DialogState } from "./context";
+import { AdminProvider, registerPeople, useAdminData, useRouteState, type AdminCtx, type DialogState } from "./context";
 import { AdminShell, browserSignOut, type Access } from "./AdminShell";
 import { AdminLoadingBody } from "./AdminLoading";
 import { ago } from "./ui";
@@ -46,7 +46,7 @@ export default function AdminApp({ employees, dates, viewer, statusOptions, last
   onLoadHistory: () => Promise<void>;
   onMyView: () => void;
 }) {
-  const { route, go, setFilter } = useRouteState();
+  const { route, go, setFilter, resolveMember } = useRouteState();
   const { data: admin, error: adminError, reload: reloadAdmin } = useAdminData();
   const [dialog, setDialog] = useState<DialogState>(null);
   const [loadingHistory, setLoadingHistory] = useState(false);
@@ -54,6 +54,13 @@ export default function AdminApp({ employees, dates, viewer, statusOptions, last
   const today = istToday();
 
   const people = useMemo(() => new Map<string, Person>((admin?.people ?? []).map((p) => [p.email, p])), [admin]);
+
+  // Let the address bar speak in employee IDs, and read a link that already does.
+  useEffect(() => {
+    if (!admin) return;
+    registerPeople(admin.people);
+    resolveMember();
+  }, [admin, resolveMember]);
 
   // Auto-dismiss, longer for an error: it is the one worth reading.
   useEffect(() => {
@@ -81,7 +88,7 @@ export default function AdminApp({ employees, dates, viewer, statusOptions, last
   const name = employees.find((e) => e.email === viewer.email)?.name || admin?.people.find((p) => p.email === viewer.email)?.full_name || viewer.email.split("@")[0];
   const access: Access = { canEdit: viewer.canEdit, canManageAccess: viewer.canManageAccess };
 
-  const memberName = route.member ? employees.find((e) => e.email === route.member)?.name || people.get(route.member)?.full_name || route.member : undefined;
+  const memberName = route.member && admin ? employees.find((e) => e.email === route.member)?.name || people.get(route.member)?.full_name || route.member : undefined;
   const crumbTail = route.page === "people" && route.member ? `${memberName}${route.settings ? " / SETTINGS" : ""}` : route.page === "teams" && route.team ? route.team : undefined;
 
   const pageKey = `${route.page}|${route.member ?? ""}|${route.settings}|${route.team ?? ""}`;

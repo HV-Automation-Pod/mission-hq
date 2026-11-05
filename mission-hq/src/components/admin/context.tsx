@@ -8,7 +8,8 @@
  * or department open on it, the Administration tab and the filters are all
  * query parameters, written with pushState, so the browser's Back button walks
  * back through the workspace, a refresh lands where it was, and a link to a
- * person's record can be sent to a colleague. Parameters are `ap` `am` `at`
+ * person's record can be sent to a colleague. A person is named in the URL by
+ * their employee ID, never their email (see `registerPeople`). Parameters are `ap` `am` `at`
  * `atab` `ps` and `dept` `site` `period`: none of them collides with the member
  * view's (`view`, `page`) or the old dashboard's, which are retired.
  *
@@ -53,6 +54,26 @@ export const DEFAULT_ROUTE: Route = {
   dept: ALL, site: ALL, period: "", day: null,
 };
 
+// A person's email is the key everywhere in the app, but it does not belong in
+// an address bar (history, referrers, screenshots). The URL carries the
+// employee ID instead; these maps translate at the boundary, so the rest of the
+// app keeps using email. Someone with no employee ID falls back to their email.
+let idByEmail = new Map<string, string>();
+let emailById = new Map<string, string>();
+
+/** Teach the URL layer who has which employee ID. Called when the people load. */
+export function registerPeople(people: Iterable<{ email: string; emp_id: string | null }>) {
+  idByEmail = new Map(); emailById = new Map();
+  for (const p of people) {
+    if (!p.emp_id) continue;
+    idByEmail.set(p.email, p.emp_id);
+    emailById.set(p.emp_id.toLowerCase(), p.email);
+  }
+}
+
+const toToken = (email: string) => idByEmail.get(email) ?? email;
+const fromToken = (token: string | null) => (token ? emailById.get(token.toLowerCase()) ?? token : null);
+
 function readRoute(): Route {
   if (typeof window === "undefined") return DEFAULT_ROUTE;
   const q = new URLSearchParams(window.location.search);
@@ -61,7 +82,7 @@ function readRoute(): Route {
   const attention = q.get("an") as AttentionTab | null;
   return {
     page: page && PAGES.includes(page) ? page : "overview",
-    member: q.get("am"), team: q.get("at"), settings: q.get("ps") === "1",
+    member: fromToken(q.get("am")), team: q.get("at"), settings: q.get("ps") === "1",
     tab: tab && TABS.includes(tab) ? tab : "access",
     attention: attention && ATTN.includes(attention) ? attention : "missing",
     dept: q.get("dept") || ALL, site: q.get("site") || ALL, period: q.get("period") || "", day: q.get("day"),
@@ -76,7 +97,7 @@ function writeRoute(r: Route, mode: "push" | "replace") {
     if (v && v !== empty) q.set(k, String(v)); else q.delete(k);
   };
   set("ap", r.page, "overview");
-  set("am", r.member);
+  set("am", r.member && toToken(r.member));
   set("at", r.team);
   set("ps", r.settings ? "1" : null);
   set("atab", r.tab, "access");
@@ -173,7 +194,17 @@ export function useRouteState() {
     commit({ ...current.current, ...to }, "replace");
   }, [commit]);
 
-  return { route, go, setFilter };
+  /** The people have loaded: a link that carried an employee ID can now name its person. */
+  const resolveMember = useCallback(() => {
+    const token = new URLSearchParams(window.location.search).get("am");
+    const email = fromToken(token);
+    if (!email) return;
+    // Also tidies an old link that still carries an email.
+    if (email === current.current.member && token === toToken(email)) return;
+    commit({ ...current.current, member: email }, "replace");
+  }, [commit]);
+
+  return { route, go, setFilter, resolveMember };
 }
 
 /** The data only admins get: access list, directory, jobs, people, groups. */
