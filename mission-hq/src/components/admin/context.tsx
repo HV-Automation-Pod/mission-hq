@@ -9,9 +9,10 @@
  * query parameters, written with pushState, so the browser's Back button walks
  * back through the workspace, a refresh lands where it was, and a link to a
  * person's record can be sent to a colleague. A person is named in the URL by
- * their opaque id, never their email (see `registerPeople`). Parameters are `ap` `am` `at`
- * `atab` `ps` and `dept` `site` `period`: none of them collides with the member
- * view's (`view`, `page`) or the old dashboard's, which are retired.
+ * their opaque id, never their email (see `registerPeople`). Parameters are
+ * `page` `person` `at` `atab` `ps` and `dept` `site` `period`. `page` is also the
+ * member view's, but the two never show at once and their values differ (the member view's are not workspace pages). `ap` and
+ * `am`, the earlier names for `page` and `person`, are still read.
  *
  * WHAT YOU MAY DO is `canEdit`, from the same viewer the server checks. It only
  * decides what to DRAW; every action re-checks role and edit permission.
@@ -77,12 +78,12 @@ const fromToken = (token: string | null) => (token ? emailById.get(token.toLower
 function readRoute(): Route {
   if (typeof window === "undefined") return DEFAULT_ROUTE;
   const q = new URLSearchParams(window.location.search);
-  const page = q.get("ap") as AdminPage | null;
+  const page = (q.get("page") ?? q.get("ap")) as AdminPage | null;
   const tab = q.get("atab") as AdminTab | null;
   const attention = q.get("an") as AttentionTab | null;
   return {
     page: page && PAGES.includes(page) ? page : "overview",
-    member: fromToken(q.get("am")), team: q.get("at"), settings: q.get("ps") === "1",
+    member: fromToken(q.get("person") ?? q.get("am")), team: q.get("at"), settings: q.get("ps") === "1",
     tab: tab && TABS.includes(tab) ? tab : "access",
     attention: attention && ATTN.includes(attention) ? attention : "missing",
     dept: q.get("dept") || ALL, site: q.get("site") || ALL, period: q.get("period") || "", day: q.get("day"),
@@ -91,13 +92,15 @@ function readRoute(): Route {
 
 function writeRoute(r: Route, mode: "push" | "replace") {
   const q = new URLSearchParams(window.location.search);
-  // The member view's own parameters are cleared: this is the workspace now.
-  q.delete("view"); q.delete("page");
+  // The member view's `view` is cleared: this is the workspace now. Its `page`
+  // is the same name as ours, with different values, and is overwritten below.
+  q.delete("view");
   const set = (k: string, v: string | null | false, empty: string | null = null) => {
     if (v && v !== empty) q.set(k, String(v)); else q.delete(k);
   };
-  set("ap", r.page, "overview");
-  set("am", r.member && toToken(r.member));
+  q.delete("ap"); q.delete("am"); // the old names, which links from before the rename still carry
+  set("page", r.page, "overview");
+  set("person", r.member && toToken(r.member));
   set("at", r.team);
   set("ps", r.settings ? "1" : null);
   set("atab", r.tab, "access");
@@ -196,11 +199,12 @@ export function useRouteState() {
 
   /** The people have loaded: a link that carried an id can now name its person. */
   const resolveMember = useCallback(() => {
-    const token = new URLSearchParams(window.location.search).get("am");
+    const q = new URLSearchParams(window.location.search);
+    const token = q.get("person") ?? q.get("am");
     const email = fromToken(token);
     if (!email) return;
     // Also tidies an old link that still carries an email.
-    if (email === current.current.member && token === toToken(email)) return;
+    if (email === current.current.member && token === toToken(email) && !q.has("am")) return;
     commit({ ...current.current, member: email }, "replace");
   }, [commit]);
 
