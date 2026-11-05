@@ -9,7 +9,7 @@
  * query parameters, written with pushState, so the browser's Back button walks
  * back through the workspace, a refresh lands where it was, and a link to a
  * person's record can be sent to a colleague. A person is named in the URL by
- * their employee ID, never their email (see `registerPeople`). Parameters are `ap` `am` `at`
+ * their opaque id, never their email (see `registerPeople`). Parameters are `ap` `am` `at`
  * `atab` `ps` and `dept` `site` `period`: none of them collides with the member
  * view's (`view`, `page`) or the old dashboard's, which are retired.
  *
@@ -56,18 +56,18 @@ export const DEFAULT_ROUTE: Route = {
 
 // A person's email is the key everywhere in the app, but it does not belong in
 // an address bar (history, referrers, screenshots). The URL carries the
-// employee ID instead; these maps translate at the boundary, so the rest of the
-// app keeps using email. Someone with no employee ID falls back to their email.
+// person's opaque uuid instead; these maps translate at the boundary, so the
+// rest of the app keeps using email. Until the people load, an unknown token is
+// passed through as it is.
 let idByEmail = new Map<string, string>();
 let emailById = new Map<string, string>();
 
-/** Teach the URL layer who has which employee ID. Called when the people load. */
-export function registerPeople(people: Iterable<{ email: string; emp_id: string | null }>) {
+/** Teach the URL layer who has which id. Called when the people load. */
+export function registerPeople(people: Iterable<{ id: string; email: string }>) {
   idByEmail = new Map(); emailById = new Map();
   for (const p of people) {
-    if (!p.emp_id) continue;
-    idByEmail.set(p.email, p.emp_id);
-    emailById.set(p.emp_id.toLowerCase(), p.email);
+    idByEmail.set(p.email, p.id);
+    emailById.set(p.id.toLowerCase(), p.email);
   }
 }
 
@@ -194,7 +194,7 @@ export function useRouteState() {
     commit({ ...current.current, ...to }, "replace");
   }, [commit]);
 
-  /** The people have loaded: a link that carried an employee ID can now name its person. */
+  /** The people have loaded: a link that carried an id can now name its person. */
   const resolveMember = useCallback(() => {
     const token = new URLSearchParams(window.location.search).get("am");
     const email = fromToken(token);

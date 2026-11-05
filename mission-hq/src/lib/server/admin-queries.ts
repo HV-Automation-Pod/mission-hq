@@ -51,6 +51,8 @@ export async function getJobs(): Promise<JobRun[]> {
 }
 
 export type Person = {
+  /** Opaque stable id; what the URL names a person by. */
+  id: string;
   email: string;
   full_name: string | null;
   team: string | null;
@@ -73,7 +75,7 @@ export type Person = {
 export async function getPeople(): Promise<Person[]> {
   const { data, error } = await requireDb()
     .from("employees")
-    .select("email,full_name,team,location,location_override,emp_id,exited_at,wfo_exempt,prompt_opt_in,notes")
+    .select("id,email,full_name,team,location,location_override,emp_id,exited_at,wfo_exempt,prompt_opt_in,notes")
     .order("full_name", { nullsFirst: false });
   if (error) throw new Error(error.message);
   return data ?? [];

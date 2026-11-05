@@ -55,7 +55,7 @@ export default function AdminApp({ employees, dates, viewer, statusOptions, last
 
   const people = useMemo(() => new Map<string, Person>((admin?.people ?? []).map((p) => [p.email, p])), [admin]);
 
-  // Let the address bar speak in employee IDs, and read a link that already does.
+  // Let the address bar speak in ids, and read a link that already does.
   useEffect(() => {
     if (!admin) return;
     registerPeople(admin.people);
