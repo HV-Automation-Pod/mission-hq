@@ -12,6 +12,7 @@ export type TriageRow = {
 };
 
 export type Person = {
+  id: string;
   email: string; full_name: string | null; team: string | null; location: string | null;
   location_override: string | null; emp_id: string | null; exited_at: string | null;
   wfo_exempt: string | null; prompt_opt_in: boolean; notes: string | null;
