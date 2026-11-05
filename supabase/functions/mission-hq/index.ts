@@ -12,6 +12,7 @@ type SlackPayload = {
   }>;
   channel?: { id?: string };
   user?: { id?: string };
+  response_url?: string;
   message?: {
     ts?: string;
     text?: string;
@@ -422,7 +423,8 @@ async function updateSlackMessage(
 
   await chatUpdate(channel, ts, responseLine, [
     { type: "section", text: { type: "mrkdwn", text } },
-    buildEditBlock(editValue),
+    // A past day is answered for good: confirm it, offer no Edit.
+    ...(isPastDay(date) ? [] : [buildEditBlock(editValue)]),
   ]);
 }
 
@@ -456,6 +458,36 @@ async function showLocationPicker(payload: SlackPayload, actionValue: string) {
 }
 
 /**
+ * Edit clicked on a day that has ended: take the button off the message and
+ * tell the person why, privately. Best effort on both; nothing is recorded.
+ */
+async function refusePastEdit(payload: SlackPayload) {
+  const channel = payload.channel?.id;
+  const ts = payload.message?.ts;
+  if (channel && ts) {
+    const body = messageBodyText(payload);
+    await chatUpdate(channel, ts, body.split("\n")[0], [
+      { type: "section", text: { type: "mrkdwn", text: body } },
+    ]);
+  }
+  if (payload.response_url) {
+    try {
+      await fetch(payload.response_url, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          response_type: "ephemeral",
+          replace_original: false,
+          text: "Past days cannot be changed from Slack. If this needs correcting, ask People & Culture.",
+        }),
+      });
+    } catch (error) {
+      console.error("MissionHQ: could not send the past-day notice", error);
+    }
+  }
+}
+
+/**
  * Put the Edit button back without recording anything.
  *
  * Used when Update is clicked but the answer has not changed. The message text
@@ -476,7 +508,7 @@ async function collapseToEdit(payload: SlackPayload, actionValue: string) {
 
   await chatUpdate(channel, ts, body.split("\n")[0], [
     { type: "section", text: { type: "mrkdwn", text: body } },
-    buildEditBlock(editValue),
+    ...(isPastDay(parseSubmitDate(actionValue)) ? [] : [buildEditBlock(editValue)]),
   ]);
 }
 
@@ -497,6 +529,16 @@ function istDateString(d: Date) {
     month: "2-digit",
     day: "2-digit",
   }).format(d);
+}
+
+/**
+ * A day that has ended is a record, not an open question, so its message gets
+ * no Edit button and an Edit click on it is refused. Changing it afterwards is
+ * an admin's correction on the dashboard. A value that is not a date is never
+ * "past": an unreadable button keeps today's behaviour rather than breaking.
+ */
+function isPastDay(date: string) {
+  return /^\d{4}-\d{2}-\d{2}$/.test(date) && date < istDateString(new Date());
 }
 
 /**
@@ -653,6 +695,12 @@ async function processSlackInteraction(payload: SlackPayload) {
   // `submit_location_` shape so both handlers share the date/meta parsers, and
   // only the action_id tells the two apart.
   if (firstAction?.action_id === "edit_location") {
+    // The nightly job removes the button from recent days; this is the control
+    // for any it has not reached, and for a click at the stroke of midnight.
+    if (isPastDay(parseSubmitDate(actionValue))) {
+      await refusePastEdit(payload);
+      return;
+    }
     await showLocationPicker(payload, actionValue);
     return;
   }
