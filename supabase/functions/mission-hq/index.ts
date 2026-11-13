@@ -99,7 +99,8 @@ async function hmacSha256Hex(secret: string, data: string) {
 
 async function verifySlackSignature(req: Request, rawBody: string) {
   const signingSecret = Deno.env.get("MISSION_HQ_SLACK_SIGNING_SECRET");
-  if (!signingSecret) return;
+  // Fails closed: skipping the check on an unset secret would accept any unsigned POST.
+  if (!signingSecret) throw new Error("MISSION_HQ_SLACK_SIGNING_SECRET is not configured");
 
   const timestamp = req.headers.get("x-slack-request-timestamp") || "";
   const slackSignature = req.headers.get("x-slack-signature") || "";
