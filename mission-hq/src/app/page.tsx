@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { RefreshCw, TriangleAlert } from "lucide-react";
+import { prefetchAdminData } from "@/lib/api/admin";
 import { DEFAULT_DAYS, FULL_HISTORY_DAYS, fetchAllData } from "@/lib/api/attendance";
 import { Employee } from "@/lib/domain/types";
 import AdminApp from "@/components/admin/AdminApp";
@@ -21,6 +22,8 @@ import { Button, C, PETROL_VARS, useLightOnly } from "@/components/ui";
  * attendance) and every action re-checks role and edit permission.
  */
 const AUTO_REFRESH_INTERVAL = 5 * 60 * 1000;
+/** Coming back to the tab refreshes, but not if it was refreshed this recently. */
+const MIN_REFRESH_GAP = 60 * 1000;
 
 type Viewer = { email: string; role: string; canEdit?: boolean; canManageAccess?: boolean };
 
@@ -64,7 +67,11 @@ export default function Dashboard() {
     }
   }, [myView]);
 
+  const loadedAt = useRef(0);
   const loadData = useCallback(async (isRefresh = false) => {
+    // First load of a remembered admin: ask for their admin data now, in
+    // parallel, instead of after the attendance payload has come back.
+    if (!isRefresh) { try { if (localStorage.getItem("missionhq-role") === "admin") prefetchAdminData(); } catch { /* no hint */ } }
     if (isRefresh) setRefreshing(true); else setLoading(true);
     setError(null);
     try {
@@ -76,6 +83,7 @@ export default function Dashboard() {
       setStatusOptions(data.statusOptions ?? []);
       setHolidays(data.holidays ?? []);
       setLastUpdated(new Date());
+      loadedAt.current = Date.now();
     } catch (err) {
       // A failed background refresh must not throw away a screen that is
       // already showing good data: keep it, and say so only on first load.
@@ -85,14 +93,16 @@ export default function Dashboard() {
 
   useEffect(() => { setMounted(true); loadData(); }, [loadData]);
   useEffect(() => {
-    const interval = setInterval(() => loadData(true), AUTO_REFRESH_INTERVAL);
+    // A hidden tab has nobody looking at it; the visibility handler below
+    // catches it up the moment it is shown again.
+    const interval = setInterval(() => { if (document.visibilityState === "visible") loadData(true); }, AUTO_REFRESH_INTERVAL);
     return () => clearInterval(interval);
   }, [loadData]);
 
   // Somebody answers in Slack and comes back to check: refresh when the tab
   // regains focus, instead of making them find a refresh button.
   useEffect(() => {
-    const onVisible = () => { if (document.visibilityState === "visible" && viewer) loadData(true); };
+    const onVisible = () => { if (document.visibilityState === "visible" && viewer && Date.now() - loadedAt.current > MIN_REFRESH_GAP) loadData(true); };
     document.addEventListener("visibilitychange", onVisible);
     return () => document.removeEventListener("visibilitychange", onVisible);
   }, [viewer, loadData]);

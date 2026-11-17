@@ -41,16 +41,15 @@ export async function GET(request: Request) {
     // The picker's options ride along, fetched in parallel, so opening it is
     // instant instead of a server round trip. Admins get them too, for their
     // own "My attendance" view.
-    const [payload, options] = await Promise.all([
+    const [payload, options, holidays] = await Promise.all([
       db.rpc("dashboard_payload", {
         p_days: Number.isFinite(days) && days > 0 && days <= 1000 ? days : 90,
         p_email: viewer.role === "admin" ? null : viewer.email,
       }),
       db.from("locations").select("value,status").eq("active", true).order("sort_order"),
+      upcomingHolidays(),
     ]);
     if (payload.error) throw new Error(payload.error.message);
-
-    const holidays = await upcomingHolidays();
 
     // Attendance changes all morning; a cached copy is worse than a slow one,
     // and `respond.ts` never lets one be stored: the payload differs per viewer.
