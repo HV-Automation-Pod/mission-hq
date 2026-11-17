@@ -1,5 +1,6 @@
 import type { AdminData } from "@/lib/domain/access-types";
 import { apiGet } from "./client";
+import { readCache, writeCache } from "./cache";
 
 /**
  * Access list, directory, jobs, people and groups. Admins only: the server checks.
@@ -18,8 +19,13 @@ export function prefetchAdminData() {
   early = { at: Date.now(), promise };
 }
 
-export function fetchAdminData(): Promise<AdminData> {
+export async function fetchAdminData(): Promise<AdminData> {
   const hit = early;
   early = null;
-  return hit && Date.now() - hit.at < PREFETCH_TTL ? hit.promise : apiGet<AdminData>("/api/admin");
+  const data = await (hit && Date.now() - hit.at < PREFETCH_TTL ? hit.promise : apiGet<AdminData>("/api/admin"));
+  writeCache("admin", data);
+  return data;
 }
+
+/** The last admin payload from this tab, to paint while the fresh one loads. */
+export const cachedAdminData = () => readCache<AdminData>("admin");

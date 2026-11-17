@@ -3,8 +3,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { RefreshCw, TriangleAlert } from "lucide-react";
 import { prefetchAdminData } from "@/lib/api/admin";
-import { DEFAULT_DAYS, FULL_HISTORY_DAYS, fetchAllData } from "@/lib/api/attendance";
-import { Employee } from "@/lib/domain/types";
+import { DEFAULT_DAYS, FULL_HISTORY_DAYS, cachedData, fetchAllData } from "@/lib/api/attendance";
+import { ApiResponse, Employee } from "@/lib/domain/types";
 import AdminApp from "@/components/admin/AdminApp";
 import AdminLoading from "@/components/admin/AdminLoading";
 import MemberLoading from "@/components/member/MemberLoading";
@@ -68,7 +68,22 @@ export default function Dashboard() {
   }, [myView]);
 
   const loadedAt = useRef(0);
+  const apply = useCallback((data: ApiResponse) => {
+    setEmployees(data.employees);
+    setDates(data.dates);
+    setViewer(data.viewer ?? null);
+    setStatusOptions(data.statusOptions ?? []);
+    setHolidays(data.holidays ?? []);
+  }, []);
+
   const loadData = useCallback(async (isRefresh = false) => {
+    // Revisiting in this tab: draw what was here last time straight away and
+    // let the fetch below replace it, as a quiet refresh rather than a loading
+    // screen. Only for the first load of the default window.
+    if (!isRefresh && days.current === DEFAULT_DAYS) {
+      const seen = cachedData();
+      if (seen?.viewer) { apply(seen); setLoading(false); isRefresh = true; }
+    }
     // First load of a remembered admin: ask for their admin data now, in
     // parallel, instead of after the attendance payload has come back.
     if (!isRefresh) { try { if (localStorage.getItem("missionhq-role") === "admin") prefetchAdminData(); } catch { /* no hint */ } }
@@ -76,12 +91,8 @@ export default function Dashboard() {
     setError(null);
     try {
       const data = await fetchAllData(days.current);
-      setEmployees(data.employees);
-      setDates(data.dates);
-      setViewer(data.viewer ?? null);
+      apply(data);
       try { if (data.viewer) localStorage.setItem("missionhq-role", data.viewer.role); } catch { /* ignore */ }
-      setStatusOptions(data.statusOptions ?? []);
-      setHolidays(data.holidays ?? []);
       setLastUpdated(new Date());
       loadedAt.current = Date.now();
     } catch (err) {
@@ -89,7 +100,7 @@ export default function Dashboard() {
       // already showing good data: keep it, and say so only on first load.
       if (!isRefresh) setError(err instanceof Error ? err.message : "Failed to load data");
     } finally { setLoading(false); setRefreshing(false); }
-  }, []);
+  }, [apply]);
 
   useEffect(() => { setMounted(true); loadData(); }, [loadData]);
   useEffect(() => {

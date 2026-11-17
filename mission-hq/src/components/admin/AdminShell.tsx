@@ -10,6 +10,7 @@ import { BrandMark } from "@/components/ui";
 import { Tooltip } from "@/components/ui";
 import { C, Avatar, Button, Modal, PETROL_VARS, focusRing, useLightOnly } from "@/components/ui";
 import type { AdminPage } from "./context";
+import { clearCache } from "@/lib/api/cache";
 
 /**
  * The frame every admin screen sits in: the 232px sidebar, the breadcrumb and
@@ -174,5 +175,6 @@ export function AdminShell({
 
 /** Sign-out through the browser client; the shell stays free of auth details. */
 export async function browserSignOut() {
+  clearCache();
   await createBrowserClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!).auth.signOut();
 }
