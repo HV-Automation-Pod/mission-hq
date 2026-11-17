@@ -19,7 +19,7 @@
  */
 
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
-import { fetchAdminData } from "@/lib/api/admin";
+import { cachedAdminData, fetchAdminData } from "@/lib/api/admin";
 import type { Employee } from "@/lib/domain/types";
 import type { AdminData, Person } from "@/lib/domain/access-types";
 import { ALL, type Filters } from "@/lib/domain/analytics";
@@ -225,7 +225,14 @@ export function useAdminData() {
     }
   }, []);
 
-  useEffect(() => { load(); }, [load]);
+  // Paint from the last visit at once, then let the fetch replace it. Read in an
+  // effect, not the initial state, so the server render and the first client
+  // render agree.
+  useEffect(() => {
+    const seen = cachedAdminData();
+    if (seen) setData(seen);
+    load();
+  }, [load]);
   return { data, error, reload: load };
 }
 

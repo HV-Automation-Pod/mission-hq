@@ -24,6 +24,12 @@ export async function apiGet<T>(url: string): Promise<T> {
     throw new ApiError("We could not reach the server. Check your connection and try again.", 0);
   }
 
+  // A signed-out request is redirected to the login page by the middleware, and
+  // fetch follows it. Say what that means instead of failing to parse HTML.
+  if (res.redirected && new URL(res.url).pathname.startsWith("/login")) {
+    throw new ApiError("Your session has ended. Sign in again.", 401);
+  }
+
   let body: ApiOk<T> | ApiFail;
   try {
     body = await res.json();

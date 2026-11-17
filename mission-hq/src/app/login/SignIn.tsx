@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { clearCache } from "@/lib/api/cache";
 import { createBrowserClient } from "@supabase/ssr";
 
 /**
@@ -10,6 +11,8 @@ import { createBrowserClient } from "@supabase/ssr";
  */
 export function SignIn({ next, variant }: { next?: string; variant: "primary" | "switch" }) {
   const [busy, setBusy] = useState(false);
+  // Whoever signs in next must never be shown the last person's cached screen.
+  useEffect(() => clearCache(), []);
 
   async function go() {
     setBusy(true);

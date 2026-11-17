@@ -28,11 +28,14 @@ export async function middleware(request: NextRequest) {
     },
   );
 
-  const { data } = await supabase.auth.getUser();
+  // getClaims() checks the token's signature locally (the signing keys are
+  // cached), where getUser() was a network call to the Auth server on every
+  // single request. It still refreshes an expired session.
+  const { data } = await supabase.auth.getClaims();
   const path = request.nextUrl.pathname;
   const isPublic = path.startsWith("/login") || path.startsWith("/auth");
 
-  if (!data.user && !isPublic) {
+  if (!data?.claims && !isPublic) {
     const url = request.nextUrl.clone();
     url.pathname = "/login";
     // Where they were going, so sign-in returns them there rather than home.

@@ -16,6 +16,7 @@ import { AllowancesPage } from "./pages/AllowancesPage";
 import { AttendancePage } from "./pages/AttendancePage";
 import { OverviewPage } from "./pages/OverviewPage";
 import { PoliciesPage } from "./pages/PoliciesPage";
+import { clearCache } from "@/lib/api/cache";
 
 /**
  * The member view, in the "Petrol & Oat" design (Penpot export, 23 Oct 2026).
@@ -134,6 +135,7 @@ export default function MemberView({ employee: loaded, dates, viewer, options, h
 
   const signOut = async () => {
     setLeaving(true);
+    clearCache();
     try {
       await createBrowserClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!).auth.signOut();
     } finally {

@@ -1,5 +1,6 @@
 import { ApiResponse, parseDepartments } from "@/lib/domain/types";
 import { apiGet } from "./client";
+import { readCache, writeCache } from "./cache";
 
 /** How far back the first load reaches: enough for the month, last month and a quarter's trend, and quick to build. */
 export const DEFAULT_DAYS = 90;
@@ -14,6 +15,19 @@ export const FULL_HISTORY_DAYS = 800;
  */
 export async function fetchAllData(days: number = DEFAULT_DAYS): Promise<ApiResponse> {
   const data = await apiGet<ApiResponse>(days === DEFAULT_DAYS ? "/api/data" : `/api/data?days=${days}`);
+  // Only the default window is kept: the full archive is large, and an admin who
+  // asked for it is already past the first paint this exists for.
+  if (days === DEFAULT_DAYS) writeCache("data", data);
+  return prepare(data);
+}
+
+/** The last default-window payload from this tab, ready to draw, or null. */
+export function cachedData(): ApiResponse | null {
+  const data = readCache<ApiResponse>("data");
+  return data ? prepare(data) : null;
+}
+
+function prepare(data: ApiResponse): ApiResponse {
   // Resolve each person's WFA allowance once, here, where the cap, the year
   // boundary and the window's dates are all in hand. Every screen then scores
   // with `scorePeriod(emp.statuses, someDates, emp.allowance)` and none of them

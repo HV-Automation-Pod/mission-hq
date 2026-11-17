@@ -2,8 +2,11 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { RefreshCw, TriangleAlert } from "lucide-react";
-import { DEFAULT_DAYS, FULL_HISTORY_DAYS, fetchAllData } from "@/lib/api/attendance";
-import { Employee } from "@/lib/domain/types";
+import { prefetchAdminData } from "@/lib/api/admin";
+import { ApiError } from "@/lib/api/client";
+import { clearCache } from "@/lib/api/cache";
+import { DEFAULT_DAYS, FULL_HISTORY_DAYS, cachedData, fetchAllData } from "@/lib/api/attendance";
+import { ApiResponse, Employee } from "@/lib/domain/types";
 import AdminApp from "@/components/admin/AdminApp";
 import AdminLoading from "@/components/admin/AdminLoading";
 import MemberLoading from "@/components/member/MemberLoading";
@@ -21,6 +24,8 @@ import { Button, C, PETROL_VARS, useLightOnly } from "@/components/ui";
  * attendance) and every action re-checks role and edit permission.
  */
 const AUTO_REFRESH_INTERVAL = 5 * 60 * 1000;
+/** Coming back to the tab refreshes, but not if it was refreshed this recently. */
+const MIN_REFRESH_GAP = 60 * 1000;
 
 type Viewer = { email: string; role: string; canEdit?: boolean; canManageAccess?: boolean };
 
@@ -64,35 +69,58 @@ export default function Dashboard() {
     }
   }, [myView]);
 
+  const loadedAt = useRef(0);
+  const apply = useCallback((data: ApiResponse) => {
+    setEmployees(data.employees);
+    setDates(data.dates);
+    setViewer(data.viewer ?? null);
+    setStatusOptions(data.statusOptions ?? []);
+    setHolidays(data.holidays ?? []);
+  }, []);
+
   const loadData = useCallback(async (isRefresh = false) => {
-    if (isRefresh) setRefreshing(true); else setLoading(true);
+    // Revisiting in this tab: draw what was here last time straight away and
+    // let the fetch below replace it, as a quiet refresh rather than a loading
+    // screen. Only for the first load of the default window.
+    let quiet = isRefresh;
+    if (!isRefresh && days.current === DEFAULT_DAYS) {
+      const seen = cachedData();
+      if (seen?.viewer) { apply(seen); setLoading(false); quiet = true; }
+    }
+    // First load of a remembered admin: ask for their admin data now, in
+    // parallel, instead of after the attendance payload has come back.
+    if (!isRefresh) { try { if (localStorage.getItem("missionhq-role") === "admin") prefetchAdminData(); } catch { /* no hint */ } }
+    if (quiet) setRefreshing(true); else setLoading(true);
     setError(null);
     try {
       const data = await fetchAllData(days.current);
-      setEmployees(data.employees);
-      setDates(data.dates);
-      setViewer(data.viewer ?? null);
+      apply(data);
       try { if (data.viewer) localStorage.setItem("missionhq-role", data.viewer.role); } catch { /* ignore */ }
-      setStatusOptions(data.statusOptions ?? []);
-      setHolidays(data.holidays ?? []);
       setLastUpdated(new Date());
+      loadedAt.current = Date.now();
     } catch (err) {
       // A failed background refresh must not throw away a screen that is
       // already showing good data: keep it, and say so only on first load.
-      if (!isRefresh) setError(err instanceof Error ? err.message : "Failed to load data");
+      // The exception is losing access: a signed-out or demoted viewer must not
+      // be left looking at a stale screen, so drop it and say why.
+      const lostAccess = err instanceof ApiError && (err.status === 401 || err.status === 403);
+      if (lostAccess) clearCache();
+      if (!quiet || lostAccess) setError(err instanceof Error ? err.message : "Failed to load data");
     } finally { setLoading(false); setRefreshing(false); }
-  }, []);
+  }, [apply]);
 
   useEffect(() => { setMounted(true); loadData(); }, [loadData]);
   useEffect(() => {
-    const interval = setInterval(() => loadData(true), AUTO_REFRESH_INTERVAL);
+    // A hidden tab has nobody looking at it; the visibility handler below
+    // catches it up the moment it is shown again.
+    const interval = setInterval(() => { if (document.visibilityState === "visible") loadData(true); }, AUTO_REFRESH_INTERVAL);
     return () => clearInterval(interval);
   }, [loadData]);
 
   // Somebody answers in Slack and comes back to check: refresh when the tab
   // regains focus, instead of making them find a refresh button.
   useEffect(() => {
-    const onVisible = () => { if (document.visibilityState === "visible" && viewer) loadData(true); };
+    const onVisible = () => { if (document.visibilityState === "visible" && viewer && Date.now() - loadedAt.current > MIN_REFRESH_GAP) loadData(true); };
     document.addEventListener("visibilitychange", onVisible);
     return () => document.removeEventListener("visibilitychange", onVisible);
   }, [viewer, loadData]);

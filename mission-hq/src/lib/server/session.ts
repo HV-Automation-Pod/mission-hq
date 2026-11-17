@@ -54,8 +54,9 @@ export async function supabaseServer() {
 /** The signed-in viewer, or null when the account is not a company one. */
 export async function getViewer(): Promise<Viewer | null> {
   const supabase = await supabaseServer();
-  const { data } = await supabase.auth.getUser();
-  const email = data.user?.email?.toLowerCase();
+  // Verified locally (see middleware.ts); no round trip to the Auth server.
+  const { data } = await supabase.auth.getClaims();
+  const email = typeof data?.claims?.email === "string" ? data.claims.email.toLowerCase() : undefined;
   if (!email) return null;
 
   const domain = email.split("@")[1];
