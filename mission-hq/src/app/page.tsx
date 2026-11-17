@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { RefreshCw, TriangleAlert } from "lucide-react";
 import { prefetchAdminData } from "@/lib/api/admin";
+import { ApiError } from "@/lib/api/client";
+import { clearCache } from "@/lib/api/cache";
 import { DEFAULT_DAYS, FULL_HISTORY_DAYS, cachedData, fetchAllData } from "@/lib/api/attendance";
 import { ApiResponse, Employee } from "@/lib/domain/types";
 import AdminApp from "@/components/admin/AdminApp";
@@ -80,14 +82,15 @@ export default function Dashboard() {
     // Revisiting in this tab: draw what was here last time straight away and
     // let the fetch below replace it, as a quiet refresh rather than a loading
     // screen. Only for the first load of the default window.
+    let quiet = isRefresh;
     if (!isRefresh && days.current === DEFAULT_DAYS) {
       const seen = cachedData();
-      if (seen?.viewer) { apply(seen); setLoading(false); isRefresh = true; }
+      if (seen?.viewer) { apply(seen); setLoading(false); quiet = true; }
     }
     // First load of a remembered admin: ask for their admin data now, in
     // parallel, instead of after the attendance payload has come back.
     if (!isRefresh) { try { if (localStorage.getItem("missionhq-role") === "admin") prefetchAdminData(); } catch { /* no hint */ } }
-    if (isRefresh) setRefreshing(true); else setLoading(true);
+    if (quiet) setRefreshing(true); else setLoading(true);
     setError(null);
     try {
       const data = await fetchAllData(days.current);
@@ -98,7 +101,11 @@ export default function Dashboard() {
     } catch (err) {
       // A failed background refresh must not throw away a screen that is
       // already showing good data: keep it, and say so only on first load.
-      if (!isRefresh) setError(err instanceof Error ? err.message : "Failed to load data");
+      // The exception is losing access: a signed-out or demoted viewer must not
+      // be left looking at a stale screen, so drop it and say why.
+      const lostAccess = err instanceof ApiError && (err.status === 401 || err.status === 403);
+      if (lostAccess) clearCache();
+      if (!quiet || lostAccess) setError(err instanceof Error ? err.message : "Failed to load data");
     } finally { setLoading(false); setRefreshing(false); }
   }, [apply]);
 

@@ -3,10 +3,13 @@
  * fresh data swaps in behind it.
  *
  * sessionStorage, not localStorage: it belongs to this tab and goes when the tab
- * does. It is also wiped on sign-out and whenever the login page loads, so a
- * different person signing in on the same tab can never be shown the previous
- * person's attendance. The copy only ever STARTS the screen; every visit still
- * fetches, and the response replaces it.
+ * does. It is also wiped on sign-out, whenever the login page loads, and when a
+ * fetch is refused (401/403), so a different person signing in on the same tab
+ * is not shown the previous person's attendance. The cache is not keyed to a
+ * user, because the browser cannot know who is signed in until the server
+ * answers; that refusal is what closes the gap (a session that ended in another
+ * tab, or a demoted admin). The copy only ever STARTS the screen; every visit
+ * still fetches, and the response replaces it.
  */
 const PREFIX = "missionhq-cache:";
 const MAX_AGE = 30 * 60 * 1000;
