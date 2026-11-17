@@ -17,13 +17,13 @@ export async function fetchAllData(days: number = DEFAULT_DAYS): Promise<ApiResp
   const data = await apiGet<ApiResponse>(days === DEFAULT_DAYS ? "/api/data" : `/api/data?days=${days}`);
   // Only the default window is kept: the full archive is large, and an admin who
   // asked for it is already past the first paint this exists for.
-  if (days === DEFAULT_DAYS) writeCache("data", data);
+  if (days === DEFAULT_DAYS) void writeCache("data", data);
   return prepare(data);
 }
 
 /** The last default-window payload from this tab, ready to draw, or null. */
-export function cachedData(): ApiResponse | null {
-  const data = readCache<ApiResponse>("data");
+export async function cachedData(): Promise<ApiResponse | null> {
+  const data = await readCache<ApiResponse>("data");
   return data ? prepare(data) : null;
 }
 

@@ -54,9 +54,13 @@ export async function supabaseServer() {
 /** The signed-in viewer, or null when the account is not a company one. */
 export async function getViewer(): Promise<Viewer | null> {
   const supabase = await supabaseServer();
-  // Verified locally (see middleware.ts); no round trip to the Auth server.
-  const { data } = await supabase.auth.getClaims();
-  const email = typeof data?.claims?.email === "string" ? data.claims.email.toLowerCase() : undefined;
+  // getUser(), not getClaims(): this is the gate in front of the data, and it
+  // must notice a session that was signed out or revoked. getClaims() only
+  // checks the token's signature, so a copied token would keep working until it
+  // expired. The middleware, which only decides the login redirect, can afford
+  // the local check; this cannot.
+  const { data } = await supabase.auth.getUser();
+  const email = data.user?.email?.toLowerCase();
   if (!email) return null;
 
   const domain = email.split("@")[1];

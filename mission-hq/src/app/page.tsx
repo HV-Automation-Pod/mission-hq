@@ -84,7 +84,7 @@ export default function Dashboard() {
     // screen. Only for the first load of the default window.
     let quiet = isRefresh;
     if (!isRefresh && days.current === DEFAULT_DAYS) {
-      const seen = cachedData();
+      const seen = await cachedData();
       if (seen?.viewer) { apply(seen); setLoading(false); quiet = true; }
     }
     // First load of a remembered admin: ask for their admin data now, in
