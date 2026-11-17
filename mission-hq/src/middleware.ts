@@ -29,8 +29,10 @@ export async function middleware(request: NextRequest) {
   );
 
   // getClaims() checks the token's signature locally (the signing keys are
-  // cached), where getUser() was a network call to the Auth server on every
-  // single request. It still refreshes an expired session.
+  // cached) instead of calling the Auth server. That is enough HERE because this
+  // only decides who is sent to /login; anything that releases data goes
+  // through getViewer(), which asks the Auth server. It still refreshes an
+  // expired session.
   const { data } = await supabase.auth.getClaims();
   const path = request.nextUrl.pathname;
   const isPublic = path.startsWith("/login") || path.startsWith("/auth");

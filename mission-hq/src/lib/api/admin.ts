@@ -23,7 +23,7 @@ export async function fetchAdminData(): Promise<AdminData> {
   const hit = early;
   early = null;
   const data = await (hit && Date.now() - hit.at < PREFETCH_TTL ? hit.promise : apiGet<AdminData>("/api/admin"));
-  writeCache("admin", data);
+  void writeCache("admin", data);
   return data;
 }
 

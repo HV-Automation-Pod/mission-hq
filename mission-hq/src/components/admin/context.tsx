@@ -229,8 +229,8 @@ export function useAdminData() {
   // effect, not the initial state, so the server render and the first client
   // render agree.
   useEffect(() => {
-    const seen = cachedAdminData();
-    if (seen) setData(seen);
+    // Only if the fetch has not already landed: never overwrite fresh with old.
+    void cachedAdminData().then((seen) => { if (seen) setData((now) => now ?? seen); });
     load();
   }, [load]);
   return { data, error, reload: load };
