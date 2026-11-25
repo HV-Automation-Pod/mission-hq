@@ -1,5 +1,5 @@
 // mission-hq-close-edit: removes the Edit button from the DMs of days that have
-// ended. Runs from 00:15 IST (see migration 55).
+// ended. Runs from 00:15 IST (see migration 56).
 //
 // The webhook already refuses an Edit click on a past day, so this is the
 // cosmetic half: the button simply stops being offered. It never creates or
