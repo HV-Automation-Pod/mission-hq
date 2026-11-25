@@ -1,13 +1,13 @@
 "use client";
 
-import { useCallback, useDeferredValue, useEffect, useMemo, useState } from "react";
-import { AnimatePresence, motion } from "framer-motion";
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import { AnimatePresence, MotionConfig, motion } from "framer-motion";
 import { Check, TriangleAlert } from "lucide-react";
 import { C, Button, Modal, pageMotion } from "@/components/ui";
 import { istToday } from "@/lib/format";
 import type { Employee } from "@/lib/domain/types";
 import type { Person } from "@/lib/domain/access-types";
-import { AdminProvider, registerPeople, useAdminData, useRouteState, type AdminCtx, type DialogState } from "./context";
+import { AdminProvider, registerPeople, useAdminData, useRouteState, type AdminCtx, type DialogState, type Route } from "./context";
 import { AdminShell, browserSignOut, type Access } from "./AdminShell";
 import { AdminLoadingBody } from "./AdminLoading";
 import { ago } from "./ui";
@@ -51,8 +51,14 @@ export default function AdminApp({ employees, dates, viewer, statusOptions, last
   // `route`, which React renders in the background. A heavy page (Analytics
   // aggregates six weeks of history) then never blanks the screen: the old page
   // stays up, dimmed, until the new one is ready to be shown.
-  const route = useDeferredValue(liveRoute);
-  const switching = route !== liveRoute;
+  //
+  // Only a change of PAGE is deferred. A filter, a period, a tab or a selected
+  // day is not, so those controls answer at once and never dim the page.
+  const deferredRoute = useDeferredValue(liveRoute);
+  const identityOf = (r: Route) => `${r.page}|${r.member ?? ""}|${r.settings}|${r.team ?? ""}`;
+  const switching = identityOf(deferredRoute) !== identityOf(liveRoute);
+  const route = switching ? deferredRoute : liveRoute;
+  const pageKey = identityOf(route);
   const { data: admin, error: adminError, reload: reloadAdmin } = useAdminData();
   const [dialog, setDialog] = useState<DialogState>(null);
   const [loadingHistory, setLoadingHistory] = useState(false);
@@ -85,11 +91,16 @@ export default function AdminApp({ employees, dates, viewer, statusOptions, last
     finally { setLoadingHistory(false); }
   }, [onLoadHistory, notify]);
 
-  const ctx: AdminCtx = {
+  // Memoized on purpose. A fresh `filters` object every render made every page's
+  // `useScope` recompute its rows (and Analytics its weekly series) on ANY
+  // AdminApp render, including the urgent pass of a page change, where it would
+  // redo the old page's whole computation before the nav could repaint.
+  const ctx = useMemo<AdminCtx>(() => ({
     employees, dates, today, viewer, statusOptions, admin, adminError, reloadAdmin, refresh: onRefresh, refreshing, lastUpdated, people,
     history: { full: fullHistory, loading: loadingHistory, load: loadHistory },
     filters: { dept: route.dept, site: route.site }, route, go, setFilter, openMember, dialog, openDialog: setDialog, notify,
-  };
+  }), [employees, dates, today, viewer, statusOptions, admin, adminError, reloadAdmin, onRefresh, refreshing, lastUpdated, people,
+    fullHistory, loadingHistory, loadHistory, route, go, setFilter, openMember, dialog, notify]);
 
   const name = employees.find((e) => e.email === viewer.email)?.name || admin?.people.find((p) => p.email === viewer.email)?.full_name || viewer.email.split("@")[0];
   const access: Access = { canEdit: viewer.canEdit, canManageAccess: viewer.canManageAccess };
@@ -97,8 +108,9 @@ export default function AdminApp({ employees, dates, viewer, statusOptions, last
   const memberName = route.member && admin ? employees.find((e) => e.email === route.member)?.name || people.get(route.member)?.full_name || route.member : undefined;
   const crumbTail = route.page === "people" && route.member ? `${memberName}${route.settings ? " / SETTINGS" : ""}` : route.page === "teams" && route.team ? route.team : undefined;
 
-  const pageKey = `${route.page}|${route.member ?? ""}|${route.settings}|${route.team ?? ""}`;
-  const content = (() => {
+  // Memoized so the urgent pass of a page change reuses the very same element
+  // for the old page instead of re-rendering it.
+  const content = useMemo(() => {
     switch (route.page) {
       case "overview": return <OverviewPage />;
       case "people": return route.member ? (route.settings ? <PersonSettingsPage /> : <MemberPage />) : <PeoplePage />;
@@ -107,11 +119,27 @@ export default function AdminApp({ employees, dates, viewer, statusOptions, last
       case "attention": return <AttentionPage />;
       case "administration": return <AdministrationPage />;
     }
-  })();
+  }, [route.page, route.member, route.settings, route.team]);
+
+  // The first page after the skeleton appears as it is; fading it in from
+  // nothing is an empty frame. Later page changes animate.
+  const shown = useRef(false);
+  const body = useRef<HTMLDivElement>(null);
+  const waitingForAdmin = !admin && !adminError && route.page !== "administration";
+  useEffect(() => { if (!waitingForAdmin) shown.current = true; }, [waitingForAdmin]);
+  // Back to the top once the new page is what is on screen, not at the click.
+  const firstKey = useRef(pageKey);
+  useEffect(() => {
+    if (firstKey.current === pageKey) return;
+    firstKey.current = pageKey;
+    window.scrollTo({ top: 0 });
+  }, [pageKey]);
+  // The old page is on its way out: it should not take clicks or focus. (`inert`
+  // is not a prop in React 18, so it is set on the element.)
+  useEffect(() => { if (body.current) body.current.inert = switching; }, [switching]);
 
   // Not on a person's own record or the settings behind it, nor Administration: a department filter means nothing there.
   const filtersApply = (route.page === "overview" || route.page === "analytics" || route.page === "attention" || route.page === "teams" || (route.page === "people" && !route.member));
-  const waitingForAdmin = !admin && !adminError && route.page !== "administration";
 
   const close = () => setDialog(null);
   const dialogBody = dialog && (
@@ -143,8 +171,10 @@ export default function AdminApp({ employees, dates, viewer, statusOptions, last
         {waitingForAdmin ? <AdminLoadingBody page={route.page} /> : (
           // No exit and no `mode="wait"`: the old page is replaced in the same
           // commit the new one is ready in, so there is never an empty frame.
-          <div style={{ opacity: switching ? 0.55 : 1, transition: "opacity 120ms ease-out" }} aria-busy={switching}>
-            <motion.div key={pageKey} variants={pageMotion} initial="initial" animate="animate">{content}</motion.div>
+          <div ref={body} style={{ opacity: switching ? 0.55 : 1, transition: "opacity 120ms ease-out" }} aria-busy={switching}>
+            <MotionConfig reducedMotion="user">
+              <motion.div key={pageKey} variants={pageMotion} initial={shown.current ? "initial" : false} animate="animate">{content}</motion.div>
+            </MotionConfig>
           </div>
         )}
       </AdminShell>

@@ -190,11 +190,9 @@ export function useRouteState() {
     // Landing on a page starts it clean: a leftover member or team from the
     // last page would open somebody's record when you only chose "People".
     const from = current.current;
-    // Switching a tab within the same page keeps your scroll position; jumping
-    // to the top there reads as the whole page flickering.
-    const tabOnly = to.tab !== undefined && to.tab !== from.tab && (to.page === undefined || to.page === from.page) && !from.member && !from.team;
+    // Scrolling to the top is AdminApp's job, when the new page has replaced the
+    // old one. Doing it here scrolled the old page away while it was still shown.
     commit({ ...from, member: null, team: null, settings: false, day: null, ...to }, "push");
-    if (!tabOnly) window.scrollTo({ top: 0 });
   }, [commit]);
 
   const setFilter = useCallback((to: Partial<Route>) => {

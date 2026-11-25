@@ -14,7 +14,6 @@ import { C, EASE } from "./theme";
 export const pageMotion: Variants = {
   initial: { opacity: 0, y: 6 },
   animate: { opacity: 1, y: 0, transition: { duration: 0.22, ease: EASE } },
-  exit: { opacity: 0, transition: { duration: 0.1, ease: "easeIn" } },
 };
 
 const stagger: Variants = { initial: {}, animate: { transition: { staggerChildren: 0.055, delayChildren: 0.04 } } };

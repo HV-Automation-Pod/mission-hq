@@ -160,10 +160,10 @@ Next.js 16 app with Turbopack. Key files:
 |------|---------|
 | `src/app/page.tsx` | Main dashboard — tabs: Overview, Compliance, Departments, Trends |
 | `src/app/api/data/route.ts` | `dashboard_payload()`, scoped to the viewer |
-| `src/lib/types.ts` | Types: `Employee` (has `departments: string[]`), `EmployeeAnalytics`, `WeekCompliance` |
-| `src/lib/api.ts` | `fetchAllData()` — fetches and populates `departments` array |
-| `src/lib/utils.ts` | `computeEmployeeAnalytics`, `calculateWeeklyCompliance`, streak calculations |
-| `src/lib/theme.ts` | Dark/light theme provider |
+| `src/lib/domain/types.ts` | Types: `Employee` (has `departments: string[]`), `EmployeeAnalytics`, `WeekCompliance` |
+| `src/lib/api/attendance.ts` | `fetchAllData()` — fetches and populates `departments` array |
+| `src/lib/domain/scoring.ts` | `calculateWeeklyCompliance` and the streak calculations |
+| `src/lib/theme.tsx` | Dark/light theme provider |
 | `src/components/StatsCards.tsx` | Today's snapshot — stat cards + KPI rings (Office, Responded, Pending) |
 | `src/components/Filters.tsx` | Department dropdown, search, date picker |
 | `src/components/Charts.tsx` | `DailyTrendChart` (week view with This/Last Week tabs, holidays marked), `StatusPieChart`, `TeamComplianceChart`, `WeeklyOfficeTrend` |
@@ -207,7 +207,7 @@ holidays move every year.
   `adherent / available`, where adherent = office days + WFH that fell on a
   **Wednesday**, and available = prompted - leave - WFA within the annual cap.
   Wednesday is the default WFH day, so four office days plus a Wednesday at home
-  is **100%, not 80%**. `src/lib/policy.ts` is a deliberate mirror of the SQL
+  is **100%, not 80%**. `src/lib/domain/policy.ts` is a deliberate mirror of the SQL
   function `member_metrics()`; a change to either must land in both.
 - **Three attendance states, not two.** No row = nobody asked (leaves the
   denominator). `'Pending'` = asked and ignored (stays in it). A status =
@@ -224,7 +224,7 @@ holidays move every year.
 
 ## Known Issues / Notes
 
-- `DAY_WEIGHTS` in `src/lib/policy.ts` is a hardcoded copy of the `locations`
+- `DAY_WEIGHTS` in `src/lib/domain/policy.ts` is a hardcoded copy of the `locations`
   table. Correct today; it drifts the day somebody adds a status.
 - A prompt whose row was written but whose DM failed is invisible to the
   verifier, so "re-running the prompt picks them up" is not true for that

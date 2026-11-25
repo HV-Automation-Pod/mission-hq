@@ -1,8 +1,8 @@
 "use client";
 
-import { useDeferredValue, useEffect, useMemo, useState } from "react";
+import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { createBrowserClient } from "@supabase/ssr";
-import { AnimatePresence, motion } from "framer-motion";
+import { AnimatePresence, MotionConfig, motion } from "framer-motion";
 import { parseISO, startOfMonth, subDays } from "date-fns";
 import { ArrowRight, Check, CircleHelp, Lock, LogOut, Menu, X } from "lucide-react";
 import { BrandMark, Button, C, Card, Modal, PETROL_VARS, Tooltip, focusRing, pageMotion, useLightOnly, viewOf } from "@/components/ui";
@@ -54,7 +54,23 @@ export default function MemberView({ employee: loaded, dates, viewer, options, h
   // the old page stays up (dimmed) until the new one is ready, never a blank frame.
   const shownPage = useDeferredValue(page);
   const switching = shownPage !== page;
-  const setPage = (p: Page) => { setPageState(p); setMenuOpen(false); window.scrollTo({ top: 0 }); };
+  const setPage = (p: Page) => { setPageState(p); setMenuOpen(false); };
+  // Back to the top once the new page is what is on screen, not at the click,
+  // where it would scroll the old page away while it is still shown.
+  const firstPage = useRef(shownPage);
+  useEffect(() => {
+    if (firstPage.current === shownPage) return;
+    firstPage.current = shownPage;
+    window.scrollTo({ top: 0 });
+  }, [shownPage]);
+  // The first page appears as it is; only later page changes fade in. `body`
+  // only exists once the page itself (not the skeleton or a notice) is drawn.
+  const body = useRef<HTMLDivElement>(null);
+  const shownOnce = useRef(false);
+  useEffect(() => { if (body.current) shownOnce.current = true; });
+  // The old page is on its way out and should not take clicks or focus (`inert`
+  // is not a prop in React 18, so it is set on the element).
+  useEffect(() => { if (body.current) body.current.inert = switching; }, [switching]);
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     if (page === "overview") params.delete("page"); else params.set("page", page);
@@ -245,13 +261,15 @@ export default function MemberView({ employee: loaded, dates, viewer, options, h
               </p>
             </Card>
           ) : (
-            <div style={{ opacity: switching ? 0.55 : 1, transition: "opacity 120ms ease-out" }} aria-busy={switching}>
-              <motion.div key={shownPage} variants={pageMotion} initial="initial" animate="animate">
-                {shownPage === "overview" ? <OverviewPage {...shared} firstName={firstName} hour={hour} />
-                  : shownPage === "attendance" ? <AttendancePage {...shared} />
-                  : shownPage === "policies" ? <PoliciesPage {...shared} />
-                  : <AllowancesPage {...shared} />}
-              </motion.div>
+            <div ref={body} style={{ opacity: switching ? 0.55 : 1, transition: "opacity 120ms ease-out" }} aria-busy={switching}>
+              <MotionConfig reducedMotion="user">
+                <motion.div key={shownPage} variants={pageMotion} initial={shownOnce.current ? "initial" : false} animate="animate">
+                  {shownPage === "overview" ? <OverviewPage {...shared} firstName={firstName} hour={hour} />
+                    : shownPage === "attendance" ? <AttendancePage {...shared} />
+                    : shownPage === "policies" ? <PoliciesPage {...shared} />
+                    : <AllowancesPage {...shared} />}
+                </motion.div>
+              </MotionConfig>
             </div>
           )}
         </main>

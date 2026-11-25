@@ -179,7 +179,7 @@ on one screen and 100% on the other.
 
 | # | Rule |
 |---|---|
-| 20 | **`dashboard/src/lib/policy.ts` is a deliberate mirror of `member_metrics()`.** A change to either must land in both in the same commit. The file says so; keep that true. 🔴 when they diverge. |
+| 20 | **`dashboard/src/lib/domain/policy.ts` is a deliberate mirror of `member_metrics()`.** A change to either must land in both in the same commit. The file says so; keep that true. 🔴 when they diverge. |
 | 21 | **Verify a port numerically, not by reading it.** The accepted evidence is a run of both against the real database with a count: "348 of 348". |
 | 22 | **`OFFICE_STATUSES`-style literals must not reappear.** Scoring belongs in `policy.ts`; a component that re-derives "is this an office day" from a string list is the bug class above, coming back. |
 | 23 | **A new status value lands in the `locations` table, the weights, and `DAY_WEIGHTS` in `policy.ts` together.** |
@@ -213,7 +213,7 @@ on one screen and 100% on the other.
 
 | # | Rule |
 |---|---|
-| 36 | **`import "server-only"` stays** on `src/lib/db.ts`, `session.ts` and `admin-queries.ts`. It is the thing stopping the service-role key reaching the browser. Removing it to fix a build error is 🔴. |
+| 36 | **`import "server-only"` stays** on every file in `dashboard/src/lib/server/` (`db.ts`, `session.ts`, `admin-queries.ts`, `respond.ts`, `supabaseAdmin.ts`). It is the thing stopping the service-role key reaching the browser. Removing it to fix a build error is 🔴. |
 | 37 | **No client file reads `process.env` except `NEXT_PUBLIC_*`.** |
 | 38 | **Every server action re-checks the viewer.** A server action is a public endpoint with a generated name, not a private function: checking permission in the page that draws the button protects the button, not the action. 🔴 for a mutation that trusts its caller. |
 | 39 | **Scoping is enforced in SQL, not in the UI.** `dashboard_payload(p_email)` means a member's request never loads another person's attendance into the process at all. A filter applied after fetching is a presentation choice, not a control. 🔴 to replace one with the other. |
