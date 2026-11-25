@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useDeferredValue, useEffect, useMemo, useState } from "react";
 import { createBrowserClient } from "@supabase/ssr";
 import { AnimatePresence, motion } from "framer-motion";
 import { parseISO, startOfMonth, subDays } from "date-fns";
@@ -50,6 +50,10 @@ export default function MemberView({ employee: loaded, dates, viewer, options, h
     const p = new URLSearchParams(window.location.search).get("page");
     return (NAV.some((n) => n.id === p) ? p : "overview") as Page;
   });
+  // The nav follows the click at once; the page body follows a deferred copy, so
+  // the old page stays up (dimmed) until the new one is ready, never a blank frame.
+  const shownPage = useDeferredValue(page);
+  const switching = shownPage !== page;
   const setPage = (p: Page) => { setPageState(p); setMenuOpen(false); window.scrollTo({ top: 0 }); };
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -241,14 +245,14 @@ export default function MemberView({ employee: loaded, dates, viewer, options, h
               </p>
             </Card>
           ) : (
-            <AnimatePresence mode="wait" initial={false}>
-              <motion.div key={page} variants={pageMotion} initial="initial" animate="animate" exit="exit">
-                {page === "overview" ? <OverviewPage {...shared} firstName={firstName} hour={hour} />
-                  : page === "attendance" ? <AttendancePage {...shared} />
-                  : page === "policies" ? <PoliciesPage {...shared} />
+            <div style={{ opacity: switching ? 0.55 : 1, transition: "opacity 120ms ease-out" }} aria-busy={switching}>
+              <motion.div key={shownPage} variants={pageMotion} initial="initial" animate="animate">
+                {shownPage === "overview" ? <OverviewPage {...shared} firstName={firstName} hour={hour} />
+                  : shownPage === "attendance" ? <AttendancePage {...shared} />
+                  : shownPage === "policies" ? <PoliciesPage {...shared} />
                   : <AllowancesPage {...shared} />}
               </motion.div>
-            </AnimatePresence>
+            </div>
           )}
         </main>
       </div>
