@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useDeferredValue, useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { Check, TriangleAlert } from "lucide-react";
 import { C, Button, Modal, pageMotion } from "@/components/ui";
@@ -46,7 +46,13 @@ export default function AdminApp({ employees, dates, viewer, statusOptions, last
   onLoadHistory: () => Promise<void>;
   onMyView: () => void;
 }) {
-  const { route, go, setFilter, resolveMember } = useRouteState();
+  const { route: liveRoute, go, setFilter, resolveMember } = useRouteState();
+  // The sidebar follows the click at once (`liveRoute`); the page body follows
+  // `route`, which React renders in the background. A heavy page (Analytics
+  // aggregates six weeks of history) then never blanks the screen: the old page
+  // stays up, dimmed, until the new one is ready to be shown.
+  const route = useDeferredValue(liveRoute);
+  const switching = route !== liveRoute;
   const { data: admin, error: adminError, reload: reloadAdmin } = useAdminData();
   const [dialog, setDialog] = useState<DialogState>(null);
   const [loadingHistory, setLoadingHistory] = useState(false);
@@ -120,8 +126,8 @@ export default function AdminApp({ employees, dates, viewer, statusOptions, last
 
   return (
     <AdminProvider value={ctx}>
-      <AdminShell page={route.page} onGo={(page) => go({ page })} access={access} name={name} onMyView={onMyView}
-        onSignOut={browserSignOut} crumbTail={crumbTail}
+      <AdminShell page={liveRoute.page} onGo={(page) => go({ page })} access={access} name={name} onMyView={onMyView}
+        onSignOut={browserSignOut} crumbTail={switching ? undefined : crumbTail}
         updated={lastUpdated ? `Updated ${ago(lastUpdated)} · IST` : undefined} onRefresh={() => { void onRefresh(); }} refreshing={refreshing}>
 
         {adminError && route.page !== "administration" && (
@@ -135,9 +141,11 @@ export default function AdminApp({ employees, dates, viewer, statusOptions, last
         {filtersApply && <FilterBanner />}
 
         {waitingForAdmin ? <AdminLoadingBody page={route.page} /> : (
-          <AnimatePresence mode="wait" initial={false}>
-            <motion.div key={pageKey} variants={pageMotion} initial="initial" animate="animate" exit="exit">{content}</motion.div>
-          </AnimatePresence>
+          // No exit and no `mode="wait"`: the old page is replaced in the same
+          // commit the new one is ready in, so there is never an empty frame.
+          <div style={{ opacity: switching ? 0.55 : 1, transition: "opacity 120ms ease-out" }} aria-busy={switching}>
+            <motion.div key={pageKey} variants={pageMotion} initial="initial" animate="animate">{content}</motion.div>
+          </div>
         )}
       </AdminShell>
 
