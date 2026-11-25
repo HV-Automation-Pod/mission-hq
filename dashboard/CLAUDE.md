@@ -13,7 +13,7 @@ has it too.
 1. **`supabase/migrations/`** — the schema. 44 migrations.
 2. **`supabase/functions/`** — 9 Edge Functions. Eight are scheduled by pg_cron;
    `mission-hq` is the Slack webhook.
-3. **`mission-hq/`** — Next.js 16 dashboard (TypeScript, Tailwind, Recharts),
+3. **`dashboard/`** — Next.js 16 dashboard (TypeScript, Tailwind, Recharts),
    with authentication and an admin surface.
 
 ## Where it lives, and why there
@@ -152,7 +152,7 @@ on the comma so one person can belong to two groups.
 
 **User**: `users.profile:read`, `users.profile:write`, `users:read`, `users:read.email`
 
-### Dashboard (`mission-hq/`)
+### Dashboard (`dashboard/`)
 
 Next.js 16 app with Turbopack. Key files:
 
@@ -384,10 +384,10 @@ other account. If a link succeeds but `vercel inspect` on the live URL 404s
 under that scope, you are linked to something new rather than to the real
 thing.
 
-**Deploy from the REPO ROOT, not from `mission-hq/`.** The project's Root
-Directory setting is `mission-hq`, so Vercel appends it to wherever you deploy
-from. Running `vercel deploy` inside `mission-hq/` makes it look for
-`mission-hq/mission-hq` and fail with "The specified Root Directory does not
+**Deploy from the REPO ROOT, not from `dashboard/`.** The project's Root
+Directory setting is `dashboard`, so Vercel appends it to wherever you deploy
+from. Running `vercel deploy` inside `dashboard/` makes it look for
+`dashboard/dashboard` and fail with "The specified Root Directory does not
 exist".
 
 ```bash
@@ -425,7 +425,7 @@ curl -s -o /dev/null -w '%{http_code}\n' https://hq.wecare.hyperverge.org/api/da
 ## Build & Run
 
 ```bash
-cd mission-hq
+cd dashboard
 npm run dev    # Development
 npx next build # Production build
 ```

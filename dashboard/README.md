@@ -65,8 +65,8 @@ Three environment variables are required, and without them every route returns
 ## Deployment
 
 The Vercel project is **`mission-hq`**, and it is deployed **from the repo
-root**, not from this folder - the project's Root Directory setting is already
-`mission-hq`. See the Deployment section of `CLAUDE.md`, where every trap in
+root**, not from this folder - the project's Root Directory setting is
+`dashboard`. See the Deployment section of `CLAUDE.md`, where every trap in
 that sentence is written down with the outage it caused.
 
 ```bash

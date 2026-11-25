@@ -9,7 +9,7 @@ reading one Postgres schema. That is the whole system; there is no second backen
 legacy carve-out from these rules.
 
 ```text
-mission-hq/                     Next.js 16 dashboard (TypeScript, React 18) -> Vercel
+dashboard/                      Next.js 16 dashboard (TypeScript, React 18) -> Vercel
 supabase/functions/*            Supabase Edge Functions (Deno, TypeScript)
 supabase/migrations/*.sql       The schema. "mission-hq" schema in the WeCare project.
 ```
@@ -84,7 +84,7 @@ because of something fifty lines away.
 Before writing a word of the report:
 
 ```bash
-cd mission-hq && npx tsc --noEmit -p .    # MUST be clean. Deploying past this has
+cd dashboard && npx tsc --noEmit -p .    # MUST be clean. Deploying past this has
 npx next build                            # fired a real production alert before.
 deno check supabase/functions/<fn>/index.ts
 ```
@@ -179,7 +179,7 @@ on one screen and 100% on the other.
 
 | # | Rule |
 |---|---|
-| 20 | **`mission-hq/src/lib/policy.ts` is a deliberate mirror of `member_metrics()`.** A change to either must land in both in the same commit. The file says so; keep that true. 🔴 when they diverge. |
+| 20 | **`dashboard/src/lib/policy.ts` is a deliberate mirror of `member_metrics()`.** A change to either must land in both in the same commit. The file says so; keep that true. 🔴 when they diverge. |
 | 21 | **Verify a port numerically, not by reading it.** The accepted evidence is a run of both against the real database with a count: "348 of 348". |
 | 22 | **`OFFICE_STATUSES`-style literals must not reappear.** Scoring belongs in `policy.ts`; a component that re-derives "is this an office day" from a string list is the bug class above, coming back. |
 | 23 | **A new status value lands in the `locations` table, the weights, and `DAY_WEIGHTS` in `policy.ts` together.** |
