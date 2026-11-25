@@ -116,7 +116,7 @@ export default function MemberView({ employee: loaded, dates, viewer, options, h
       // Success or not, drop the local copy: the refetch carries the truth, or the
       // answer was refused and the old state should come back.
       return Promise.resolve(onChanged()).finally(() =>
-        setPendingSaves((p) => { const { [day]: _gone, ...rest } = p; return rest; }));
+        setPendingSaves((p) => { const rest = { ...p }; delete rest[day]; return rest; }));
     });
   };
 

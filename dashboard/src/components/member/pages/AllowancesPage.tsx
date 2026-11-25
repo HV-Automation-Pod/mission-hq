@@ -2,7 +2,7 @@
 
 import { addDays, format, parseISO } from "date-fns";
 import { Globe, Home, Info, Leaf } from "lucide-react";
-import { C, Card, Pill, Segments, RiseCard, Stagger } from "@/components/ui";
+import { C, Pill, Segments, RiseCard, Stagger } from "@/components/ui";
 import { fmtHalfDays } from "@/lib/domain/policy";
 import { type PageProps } from "../model";
 import { PageHead, PersonalChip } from "../parts/PageHead";

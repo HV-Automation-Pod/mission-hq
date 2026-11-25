@@ -12,7 +12,7 @@ const reasonOf = (t: TriageRow) => t.exited ? "Exited in Zoho" : t.possible_zoho
 
 export default function DirectoryTab() {
   const { admin, viewer, reloadAdmin, notify } = useAdmin();
-  const rows = admin?.triage ?? [];
+  const rows = useMemo(() => admin?.triage ?? [], [admin?.triage]);
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<string | null>(rows[0]?.email ?? null);
   const [exempting, setExempting] = useState(false);
