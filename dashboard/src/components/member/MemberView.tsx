@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { createBrowserClient } from "@supabase/ssr";
-import { AnimatePresence, LayoutGroup, motion } from "framer-motion";
+import { AnimatePresence, MotionConfig, motion } from "framer-motion";
 import { parseISO, startOfMonth, subDays } from "date-fns";
 import { ArrowRight, Check, CircleHelp, Lock, LogOut, Menu, X } from "lucide-react";
 import { BrandMark, Button, C, Card, Modal, PETROL_VARS, Tooltip, focusRing, pageMotion, useLightOnly, viewOf } from "@/components/ui";
@@ -50,7 +50,27 @@ export default function MemberView({ employee: loaded, dates, viewer, options, h
     const p = new URLSearchParams(window.location.search).get("page");
     return (NAV.some((n) => n.id === p) ? p : "overview") as Page;
   });
-  const setPage = (p: Page) => { setPageState(p); setMenuOpen(false); window.scrollTo({ top: 0 }); };
+  // The nav follows the click at once; the page body follows a deferred copy, so
+  // the old page stays up (dimmed) until the new one is ready, never a blank frame.
+  const shownPage = useDeferredValue(page);
+  const switching = shownPage !== page;
+  const setPage = (p: Page) => { setPageState(p); setMenuOpen(false); };
+  // Back to the top once the new page is what is on screen, not at the click,
+  // where it would scroll the old page away while it is still shown.
+  const firstPage = useRef(shownPage);
+  useEffect(() => {
+    if (firstPage.current === shownPage) return;
+    firstPage.current = shownPage;
+    window.scrollTo({ top: 0 });
+  }, [shownPage]);
+  // The first page appears as it is; only later page changes fade in. `body`
+  // only exists once the page itself (not the skeleton or a notice) is drawn.
+  const body = useRef<HTMLDivElement>(null);
+  const shownOnce = useRef(false);
+  useEffect(() => { if (body.current) shownOnce.current = true; });
+  // The old page is on its way out and should not take clicks or focus (`inert`
+  // is not a prop in React 18, so it is set on the element).
+  useEffect(() => { if (body.current) body.current.inert = switching; }, [switching]);
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     if (page === "overview") params.delete("page"); else params.set("page", page);
@@ -116,7 +136,7 @@ export default function MemberView({ employee: loaded, dates, viewer, options, h
       // Success or not, drop the local copy: the refetch carries the truth, or the
       // answer was refused and the old state should come back.
       return Promise.resolve(onChanged()).finally(() =>
-        setPendingSaves((p) => { const { [day]: _gone, ...rest } = p; return rest; }));
+        setPendingSaves((p) => { const rest = { ...p }; delete rest[day]; return rest; }));
     });
   };
 
@@ -162,20 +182,18 @@ export default function MemberView({ employee: loaded, dates, viewer, options, h
           </div>
         </div>
         <div className="px-6 pb-3 text-[11px] tracking-[0.14em]" style={{ color: C.muted }}>MY WORKSPACE</div>
-        <LayoutGroup id="member-nav">
-          <nav className="px-3 space-y-1" aria-label="My workspace">
-            {NAV.map(({ id, label, Icon }) => (
-              <button key={id} onClick={() => setPage(id)} aria-current={page === id ? "page" : undefined}
-                className={`relative w-full flex items-center gap-3 px-3.5 h-11 rounded-xl text-[14px] font-medium transition-colors ${page === id ? "" : "hover:bg-[#EEF3F1]"} ${focusRing}`}
-                style={{ color: page === id ? C.text : C.text2 }}>
-                {page === id && <motion.span layoutId="member-nav-active" className="absolute inset-0 rounded-xl" style={{ background: C.selected }} transition={{ type: "spring", stiffness: 420, damping: 36 }} />}
-                {page === id && <span className="absolute left-0 top-2.5 bottom-2.5 w-[3px] rounded-r" style={{ background: C.primary }} />}
-                <Icon size={18} className="relative flex-shrink-0" />
-                <span className="relative whitespace-nowrap">{label}</span>
-              </button>
-            ))}
-          </nav>
-        </LayoutGroup>
+        <nav className="px-3 space-y-1" aria-label="My workspace">
+          {NAV.map(({ id, label, Icon }) => (
+            <button key={id} onClick={() => setPage(id)} aria-current={page === id ? "page" : undefined}
+              className={`relative w-full flex items-center gap-3 px-3.5 h-11 rounded-xl text-[14px] font-medium transition-colors ${page === id ? "" : "hover:bg-[#EEF3F1]"} ${focusRing}`}
+              style={{ color: page === id ? C.text : C.text2 }}>
+              {page === id && <span className="absolute inset-0 rounded-xl" style={{ background: C.selected }} />}
+              {page === id && <span className="absolute left-0 top-2.5 bottom-2.5 w-[3px] rounded-r" style={{ background: C.primary }} />}
+              <Icon size={18} className="relative flex-shrink-0" />
+              <span className="relative whitespace-nowrap">{label}</span>
+            </button>
+          ))}
+        </nav>
         <div className="mt-auto p-3 space-y-3">
           <div className="rounded-2xl p-4" style={{ background: C.surface, border: `1px solid ${C.border}` }}>
             <div className="flex items-center gap-2 text-[13px] font-medium"><Lock size={14} /> Your own record</div>
@@ -243,30 +261,30 @@ export default function MemberView({ employee: loaded, dates, viewer, options, h
               </p>
             </Card>
           ) : (
-            <AnimatePresence mode="wait" initial={false}>
-              <motion.div key={page} variants={pageMotion} initial="initial" animate="animate" exit="exit">
-                {page === "overview" ? <OverviewPage {...shared} firstName={firstName} hour={hour} />
-                  : page === "attendance" ? <AttendancePage {...shared} />
-                  : page === "policies" ? <PoliciesPage {...shared} />
-                  : <AllowancesPage {...shared} />}
-              </motion.div>
-            </AnimatePresence>
+            <div ref={body} style={{ opacity: switching ? 0.55 : 1, transition: "opacity 120ms ease-out" }} aria-busy={switching}>
+              <MotionConfig reducedMotion="user">
+                <motion.div key={shownPage} variants={pageMotion} initial={shownOnce.current ? "initial" : false} animate="animate">
+                  {shownPage === "overview" ? <OverviewPage {...shared} firstName={firstName} hour={hour} />
+                    : shownPage === "attendance" ? <AttendancePage {...shared} />
+                    : shownPage === "policies" ? <PoliciesPage {...shared} />
+                    : <AllowancesPage {...shared} />}
+                </motion.div>
+              </MotionConfig>
+            </div>
           )}
         </main>
       </div>
 
       {/* ── Tab bar (phone) ── */}
       <nav className="lg:hidden fixed bottom-0 inset-x-0 z-40 grid grid-cols-4 gap-2 p-3" style={{ background: C.canvas, borderTop: `1px solid ${C.border}` }} aria-label="My workspace">
-        <LayoutGroup id="member-tabs">
-          {NAV.map(({ id, label, Icon }) => (
-            <button key={id} onClick={() => setPage(id)} aria-current={page === id ? "page" : undefined}
-              className={`relative flex flex-col items-center justify-center gap-0.5 rounded-xl h-[52px] text-[11px] font-medium ${focusRing}`}
-              style={page === id ? { color: C.primary } : { background: C.surface, color: C.text2, border: `1px solid ${C.border}` }}>
-              {page === id && <motion.span layoutId="member-tab-active" className="absolute inset-0 rounded-xl" style={{ background: C.selected }} transition={{ type: "spring", stiffness: 420, damping: 36 }} />}
-              <Icon size={16} className="relative" /> <span className="relative">{id === "attendance" ? "Attendance" : label}</span>
-            </button>
-          ))}
-        </LayoutGroup>
+        {NAV.map(({ id, label, Icon }) => (
+          <button key={id} onClick={() => setPage(id)} aria-current={page === id ? "page" : undefined}
+            className={`relative flex flex-col items-center justify-center gap-0.5 rounded-xl h-[52px] text-[11px] font-medium ${focusRing}`}
+            style={page === id ? { color: C.primary } : { background: C.surface, color: C.text2, border: `1px solid ${C.border}` }}>
+            {page === id && <span className="absolute inset-0 rounded-xl" style={{ background: C.selected }} />}
+            <Icon size={16} className="relative" /> <span className="relative">{id === "attendance" ? "Attendance" : label}</span>
+          </button>
+        ))}
       </nav>
 
       <AnimatePresence>

@@ -5,7 +5,7 @@ import { addDays, format, parseISO, startOfMonth, startOfWeek } from "date-fns";
 import { AnimatePresence, motion } from "framer-motion";
 import { ChevronLeft, Lock, Pencil } from "lucide-react";
 import { Tooltip } from "@/components/ui";
-import { C, Bone, Button, Card, CountUp, Item, LinkButton, Pill, Stagger, viewOf } from "@/components/ui";
+import { C, Bone, Button, Card, CountUp, Item, LinkButton, Pill, Stagger } from "@/components/ui";
 import { iso } from "@/lib/format";
 import { getAttendanceRecord } from "@/lib/actions/attendance";
 import { fmtDays, isRealWeek, scorePeriod } from "@/lib/domain/policy";
@@ -89,7 +89,6 @@ export default function MemberPage() {
   const earliest = startOfMonth(parseISO(first ?? today));
   const status = employee.statuses[day];
   const canEdit = viewer.canEdit;
-  const v = status ? viewOf(status) : null;
 
   // The week's score as it is, and what Office on this day would make it.
   const effect = status && status !== "Office" ? weekEffect(employee, dates, today, day, "Office") : null;
@@ -159,14 +158,14 @@ export default function MemberPage() {
             </div>
           </Card>
 
-          <SyncCard day={day} today={today} status={status} rec={rec} onRetry={retry} />
+          <SyncCard day={day} today={today} rec={rec} onRetry={retry} />
         </div>
       </div>
     </>
   );
 }
 
-function SyncCard({ day, today, status, rec, onRetry }: { day: string; today: string; status?: string; rec: RecordState; onRetry: () => void }) {
+function SyncCard({ day, today, rec, onRetry }: { day: string; today: string; rec: RecordState; onRetry: () => void }) {
   const lines: { k: string; v: string }[] = [];
   if (rec.state === "ready") {
     const r = rec.record;

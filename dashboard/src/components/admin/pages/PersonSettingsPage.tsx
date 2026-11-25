@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { ChevronLeft, Info, Lock } from "lucide-react";
-import { C, Avatar, Button, Card, FieldLabel, Pill, Select, TextInput, focusRing } from "@/components/ui";
+import { C, Avatar, Button, Card, Pill, Select, TextInput, focusRing } from "@/components/ui";
 import { setExempt, setPromptOptIn, setSiteOverride } from "@/lib/actions/people";
 import { siteOf } from "@/lib/domain/analytics";
 import { useAdmin } from "../context";

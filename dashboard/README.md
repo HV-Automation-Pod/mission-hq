@@ -45,6 +45,11 @@ signed in; `getViewer()` decides what they are allowed to see.
 Next.js 16 (App Router, Turbopack), TypeScript, Tailwind, Recharts,
 `@supabase/ssr` for auth, Lucide icons.
 
+> **After the move from `mission-hq/` to `dashboard/`:** your untracked `.env` and
+> `.env.local` stay behind in the old `mission-hq/` folder (git removes only
+> tracked files). Move them into `dashboard/` before running the app, then delete
+> the old folder, and `rm -rf dashboard/.next` if you had a dev server running.
+
 ## Getting started
 
 ```bash
@@ -65,8 +70,8 @@ Three environment variables are required, and without them every route returns
 ## Deployment
 
 The Vercel project is **`mission-hq`**, and it is deployed **from the repo
-root**, not from this folder - the project's Root Directory setting is already
-`mission-hq`. See the Deployment section of `CLAUDE.md`, where every trap in
+root**, not from this folder - the project's Root Directory setting is
+`dashboard`. See the Deployment section of `CLAUDE.md`, where every trap in
 that sentence is written down with the outage it caused.
 
 ```bash

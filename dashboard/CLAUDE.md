@@ -13,7 +13,7 @@ has it too.
 1. **`supabase/migrations/`** — the schema. 44 migrations.
 2. **`supabase/functions/`** — 9 Edge Functions. Eight are scheduled by pg_cron;
    `mission-hq` is the Slack webhook.
-3. **`mission-hq/`** — Next.js 16 dashboard (TypeScript, Tailwind, Recharts),
+3. **`dashboard/`** — Next.js 16 dashboard (TypeScript, Tailwind, Recharts),
    with authentication and an admin surface.
 
 ## Where it lives, and why there
@@ -152,7 +152,7 @@ on the comma so one person can belong to two groups.
 
 **User**: `users.profile:read`, `users.profile:write`, `users:read`, `users:read.email`
 
-### Dashboard (`mission-hq/`)
+### Dashboard (`dashboard/`)
 
 Next.js 16 app with Turbopack. Key files:
 
@@ -160,18 +160,10 @@ Next.js 16 app with Turbopack. Key files:
 |------|---------|
 | `src/app/page.tsx` | Main dashboard — tabs: Overview, Compliance, Departments, Trends |
 | `src/app/api/data/route.ts` | `dashboard_payload()`, scoped to the viewer |
-| `src/lib/types.ts` | Types: `Employee` (has `departments: string[]`), `EmployeeAnalytics`, `WeekCompliance` |
-| `src/lib/api.ts` | `fetchAllData()` — fetches and populates `departments` array |
-| `src/lib/utils.ts` | `computeEmployeeAnalytics`, `calculateWeeklyCompliance`, streak calculations |
-| `src/lib/theme.ts` | Dark/light theme provider |
-| `src/components/StatsCards.tsx` | Today's snapshot — stat cards + KPI rings (Office, Responded, Pending) |
-| `src/components/Filters.tsx` | Department dropdown, search, date picker |
-| `src/components/Charts.tsx` | `DailyTrendChart` (week view with This/Last Week tabs, holidays marked), `StatusPieChart`, `TeamComplianceChart`, `WeeklyOfficeTrend` |
-| `src/components/WeeklyOfficeCompliance.tsx` | Weekly 4-day office check — This/Last Week, shows who met 4-day requirement |
-| `src/components/ComplianceTracker.tsx` | Overall compliance — date range, office days/total, compliant weeks/total, rate |
-| `src/components/TeamBreakdown.tsx` | Department-grouped employee status table with date pagination |
-| `src/components/EmployeeDetail.tsx` | Employee modal — compliance, streaks, status breakdown, heatmap |
-| `src/components/StatusBadge.tsx` | Status display component |
+| `src/lib/domain/types.ts` | Types: `Employee` (has `departments: string[]`), `EmployeeAnalytics`, `WeekCompliance` |
+| `src/lib/api/attendance.ts` | `fetchAllData()` — fetches and populates `departments` array |
+| `src/lib/domain/scoring.ts` | `calculateWeeklyCompliance` and the streak calculations |
+| `src/lib/theme.tsx` | Dark/light theme provider |
 
 ### Dashboard Overview Tab Layout (top to bottom)
 
@@ -207,7 +199,7 @@ holidays move every year.
   `adherent / available`, where adherent = office days + WFH that fell on a
   **Wednesday**, and available = prompted - leave - WFA within the annual cap.
   Wednesday is the default WFH day, so four office days plus a Wednesday at home
-  is **100%, not 80%**. `src/lib/policy.ts` is a deliberate mirror of the SQL
+  is **100%, not 80%**. `src/lib/domain/policy.ts` is a deliberate mirror of the SQL
   function `member_metrics()`; a change to either must land in both.
 - **Three attendance states, not two.** No row = nobody asked (leaves the
   denominator). `'Pending'` = asked and ignored (stays in it). A status =
@@ -224,7 +216,7 @@ holidays move every year.
 
 ## Known Issues / Notes
 
-- `DAY_WEIGHTS` in `src/lib/policy.ts` is a hardcoded copy of the `locations`
+- `DAY_WEIGHTS` in `src/lib/domain/policy.ts` is a hardcoded copy of the `locations`
   table. Correct today; it drifts the day somebody adds a status.
 - A prompt whose row was written but whose DM failed is invisible to the
   verifier, so "re-running the prompt picks them up" is not true for that
@@ -384,10 +376,10 @@ other account. If a link succeeds but `vercel inspect` on the live URL 404s
 under that scope, you are linked to something new rather than to the real
 thing.
 
-**Deploy from the REPO ROOT, not from `mission-hq/`.** The project's Root
-Directory setting is `mission-hq`, so Vercel appends it to wherever you deploy
-from. Running `vercel deploy` inside `mission-hq/` makes it look for
-`mission-hq/mission-hq` and fail with "The specified Root Directory does not
+**Deploy from the REPO ROOT, not from `dashboard/`.** The project's Root
+Directory setting is `dashboard`, so Vercel appends it to wherever you deploy
+from. Running `vercel deploy` inside `dashboard/` makes it look for
+`dashboard/dashboard` and fail with "The specified Root Directory does not
 exist".
 
 ```bash
@@ -425,7 +417,7 @@ curl -s -o /dev/null -w '%{http_code}\n' https://hq.wecare.hyperverge.org/api/da
 ## Build & Run
 
 ```bash
-cd mission-hq
+cd dashboard
 npm run dev    # Development
 npx next build # Production build
 ```

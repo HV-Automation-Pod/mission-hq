@@ -3,7 +3,7 @@
 import { motion } from "framer-motion";
 import { useEffect, useRef, useState } from "react";
 import { addDays, addMonths, endOfMonth, format, parseISO, startOfMonth, startOfWeek } from "date-fns";
-import { AlertCircle, ArrowRight, ChevronLeft, ChevronRight, Lock, Pencil } from "lucide-react";
+import { AlertCircle, ChevronLeft, ChevronRight, Lock, Pencil } from "lucide-react";
 import { C, Card, Pill, btnOutline, focusRing, pctColor, viewOf, Tooltip } from "@/components/ui";
 import { fmtDays, scorePeriod } from "@/lib/domain/policy";
 import { iso } from "@/lib/format";

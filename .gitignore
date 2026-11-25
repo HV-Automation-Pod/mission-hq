@@ -11,3 +11,4 @@ todo.md
 **/supabase/.temp/
 .vercel
 .env*
+!.env.example

@@ -2,7 +2,7 @@
 
 import { addDays, format, parseISO } from "date-fns";
 import { Building2, CircleHelp, Globe, Home, Leaf, type LucideIcon } from "lucide-react";
-import { C, Card, btnPrimary, focusRing, RiseCard, Stagger, CountUp } from "@/components/ui";
+import { C, btnPrimary, focusRing, RiseCard, Stagger, CountUp } from "@/components/ui";
 import { fmtDays } from "@/lib/domain/policy";
 import { type PageProps } from "../model";
 import { PageHead, PersonalChip } from "../parts/PageHead";

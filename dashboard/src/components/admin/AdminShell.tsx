@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { createBrowserClient } from "@supabase/ssr";
-import { AnimatePresence, LayoutGroup, motion, useReducedMotion } from "framer-motion";
+import { AnimatePresence, useReducedMotion } from "framer-motion";
 import {
   Building2, CircleAlert, LayoutGrid, LineChart, Lock, LogOut, RefreshCw, Settings, Users, type LucideIcon,
 } from "lucide-react";
@@ -45,8 +45,7 @@ function NavItem({ id, label, Icon, active, onGo }: {
       className={`relative w-full flex items-center gap-3 px-3.5 h-11 rounded-xl text-[14px] font-medium transition-colors ${!active && onGo ? "hover:bg-[#EEF3F1]" : ""} ${focusRing}`}
       style={{ color: active ? C.text : C.text2 }}>
       {active && (
-        <motion.span layoutId="admin-nav-active" className="absolute inset-0 rounded-xl" style={{ background: C.selected }}
-          transition={{ type: "spring", stiffness: 420, damping: 36 }} />
+        <span className="absolute inset-0 rounded-xl" style={{ background: C.selected }} />
       )}
       {active && <span className="absolute left-0 top-2.5 bottom-2.5 w-[3px] rounded-r" style={{ background: C.primary }} />}
       <Icon size={18} className="relative flex-shrink-0" />
@@ -102,16 +101,14 @@ export function AdminShell({
           <span className="block w-full text-[12px] font-medium px-3.5 py-2 rounded-full" style={{ background: C.selected, color: C.primary }}>Admin workspace</span>
         </div>
 
-        <LayoutGroup id="admin-nav">
-          <div className="px-6 pb-3 text-[11px] tracking-[0.14em]" style={{ color: C.muted }}>WORKSPACE</div>
-          <nav className="px-3 space-y-1" aria-label="Workspace">
-            {MAIN.map((n) => <NavItem key={n.id} {...n} active={page === n.id} onGo={onGo} />)}
-          </nav>
-          <div className="px-6 pt-8 pb-3 text-[11px] tracking-[0.14em]" style={{ color: C.muted }}>MANAGE</div>
-          <nav className="px-3 space-y-1" aria-label="Manage">
-            {MANAGE.map((n) => <NavItem key={n.id} {...n} active={page === n.id} onGo={onGo} />)}
-          </nav>
-        </LayoutGroup>
+        <div className="px-6 pb-3 text-[11px] tracking-[0.14em]" style={{ color: C.muted }}>WORKSPACE</div>
+        <nav className="px-3 space-y-1" aria-label="Workspace">
+          {MAIN.map((n) => <NavItem key={n.id} {...n} active={page === n.id} onGo={onGo} />)}
+        </nav>
+        <div className="px-6 pt-8 pb-3 text-[11px] tracking-[0.14em]" style={{ color: C.muted }}>MANAGE</div>
+        <nav className="px-3 space-y-1" aria-label="Manage">
+          {MANAGE.map((n) => <NavItem key={n.id} {...n} active={page === n.id} onGo={onGo} />)}
+        </nav>
 
         <div className="mt-auto p-3 space-y-3">
           <div className="rounded-2xl p-4" style={{ background: C.surface, border: `1px solid ${C.border}` }}>
