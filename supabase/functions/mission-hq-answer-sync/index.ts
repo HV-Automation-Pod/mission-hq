@@ -146,7 +146,9 @@ async function syncSlackMessage(
     text: responseLine,
     blocks: [
       { type: "section", text: { type: "mrkdwn", text } },
-      {
+      // A day that has ended is answered for good, so no Edit button (the
+      // webhook refuses the click anyway). Today keeps it.
+      ...(day < istToday() ? [] : [{
         type: "actions",
         elements: [{
           type: "button",
@@ -154,7 +156,7 @@ async function syncSlackMessage(
           value: buildEditValue(existingValue, chosen.value, locations, day, email),
           action_id: "edit_location",
         }],
-      },
+      }]),
     ],
   });
   if (!result.ok) return `failed: ${result.error}`;
