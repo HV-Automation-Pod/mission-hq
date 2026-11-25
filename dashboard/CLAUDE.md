@@ -164,14 +164,6 @@ Next.js 16 app with Turbopack. Key files:
 | `src/lib/api/attendance.ts` | `fetchAllData()` — fetches and populates `departments` array |
 | `src/lib/domain/scoring.ts` | `calculateWeeklyCompliance` and the streak calculations |
 | `src/lib/theme.tsx` | Dark/light theme provider |
-| `src/components/StatsCards.tsx` | Today's snapshot — stat cards + KPI rings (Office, Responded, Pending) |
-| `src/components/Filters.tsx` | Department dropdown, search, date picker |
-| `src/components/Charts.tsx` | `DailyTrendChart` (week view with This/Last Week tabs, holidays marked), `StatusPieChart`, `TeamComplianceChart`, `WeeklyOfficeTrend` |
-| `src/components/WeeklyOfficeCompliance.tsx` | Weekly 4-day office check — This/Last Week, shows who met 4-day requirement |
-| `src/components/ComplianceTracker.tsx` | Overall compliance — date range, office days/total, compliant weeks/total, rate |
-| `src/components/TeamBreakdown.tsx` | Department-grouped employee status table with date pagination |
-| `src/components/EmployeeDetail.tsx` | Employee modal — compliance, streaks, status breakdown, heatmap |
-| `src/components/StatusBadge.tsx` | Status display component |
 
 ### Dashboard Overview Tab Layout (top to bottom)
 

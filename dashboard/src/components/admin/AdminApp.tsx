@@ -34,7 +34,7 @@ import OperationDialog from "./dialogs/OperationDialog";
  * same policy code as the member view and the Slack report, so there is one
  * answer to "what is this person's score" on every screen.
  */
-export default function AdminApp({ employees, dates, viewer, statusOptions, lastUpdated, refreshing, onRefresh, fullHistory, onLoadHistory, onMyView }: {
+export default function AdminApp({ employees, dates, viewer: viewerProp, statusOptions, lastUpdated, refreshing, onRefresh: onRefreshProp, fullHistory, onLoadHistory, onMyView }: {
   employees: Employee[];
   dates: string[];
   viewer: { email: string; canEdit: boolean; canManageAccess: boolean };
@@ -46,6 +46,15 @@ export default function AdminApp({ employees, dates, viewer, statusOptions, last
   onLoadHistory: () => Promise<void>;
   onMyView: () => void;
 }) {
+  // The parent builds `viewer` and `onRefresh` inline, so they are new on every
+  // parent render. Rebuild them from their parts / behind a ref so they do not
+  // invalidate `ctx` (and every page's memoized work) when nothing changed.
+  const { email: viewerEmail, canEdit: viewerCanEdit, canManageAccess: viewerCanManage } = viewerProp;
+  const viewer = useMemo(() => ({ email: viewerEmail, canEdit: viewerCanEdit, canManageAccess: viewerCanManage }), [viewerEmail, viewerCanEdit, viewerCanManage]);
+  const onRefreshRef = useRef(onRefreshProp);
+  useEffect(() => { onRefreshRef.current = onRefreshProp; });
+  const onRefresh = useCallback(() => onRefreshRef.current(), []);
+
   const { route: liveRoute, go, setFilter, resolveMember } = useRouteState();
   // The sidebar follows the click at once (`liveRoute`); the page body follows
   // `route`, which React renders in the background. A heavy page (Analytics
@@ -95,12 +104,13 @@ export default function AdminApp({ employees, dates, viewer, statusOptions, last
   // `useScope` recompute its rows (and Analytics its weekly series) on ANY
   // AdminApp render, including the urgent pass of a page change, where it would
   // redo the old page's whole computation before the nav could repaint.
+  const filters = useMemo(() => ({ dept: route.dept, site: route.site }), [route.dept, route.site]);
   const ctx = useMemo<AdminCtx>(() => ({
     employees, dates, today, viewer, statusOptions, admin, adminError, reloadAdmin, refresh: onRefresh, refreshing, lastUpdated, people,
     history: { full: fullHistory, loading: loadingHistory, load: loadHistory },
-    filters: { dept: route.dept, site: route.site }, route, go, setFilter, openMember, dialog, openDialog: setDialog, notify,
+    filters, route, go, setFilter, openMember, dialog, openDialog: setDialog, notify,
   }), [employees, dates, today, viewer, statusOptions, admin, adminError, reloadAdmin, onRefresh, refreshing, lastUpdated, people,
-    fullHistory, loadingHistory, loadHistory, route, go, setFilter, openMember, dialog, notify]);
+    fullHistory, loadingHistory, loadHistory, filters, route, go, setFilter, openMember, dialog, notify]);
 
   const name = employees.find((e) => e.email === viewer.email)?.name || admin?.people.find((p) => p.email === viewer.email)?.full_name || viewer.email.split("@")[0];
   const access: Access = { canEdit: viewer.canEdit, canManageAccess: viewer.canManageAccess };
@@ -128,10 +138,18 @@ export default function AdminApp({ employees, dates, viewer, statusOptions, last
   const waitingForAdmin = !admin && !adminError && route.page !== "administration";
   useEffect(() => { if (!waitingForAdmin) shown.current = true; }, [waitingForAdmin]);
   // Back to the top once the new page is what is on screen, not at the click.
+  // Back and Forward leave the scroll alone, as they did before.
   const firstKey = useRef(pageKey);
+  const fromHistory = useRef(false);
+  useEffect(() => {
+    const onPop = () => { fromHistory.current = true; };
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
   useEffect(() => {
     if (firstKey.current === pageKey) return;
     firstKey.current = pageKey;
+    if (fromHistory.current) { fromHistory.current = false; return; }
     window.scrollTo({ top: 0 });
   }, [pageKey]);
   // The old page is on its way out: it should not take clicks or focus. (`inert`
