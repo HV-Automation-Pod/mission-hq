@@ -189,8 +189,12 @@ export function useRouteState() {
   const go = useCallback((to: Partial<Route>) => {
     // Landing on a page starts it clean: a leftover member or team from the
     // last page would open somebody's record when you only chose "People".
-    commit({ ...current.current, member: null, team: null, settings: false, day: null, ...to }, "push");
-    window.scrollTo({ top: 0 });
+    const from = current.current;
+    // Switching a tab within the same page keeps your scroll position; jumping
+    // to the top there reads as the whole page flickering.
+    const tabOnly = to.tab !== undefined && to.tab !== from.tab && (to.page === undefined || to.page === from.page) && !from.member && !from.team;
+    commit({ ...from, member: null, team: null, settings: false, day: null, ...to }, "push");
+    if (!tabOnly) window.scrollTo({ top: 0 });
   }, [commit]);
 
   const setFilter = useCallback((to: Partial<Route>) => {

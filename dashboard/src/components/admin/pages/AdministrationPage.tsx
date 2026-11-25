@@ -1,6 +1,5 @@
 "use client";
 
-import { AnimatePresence, motion } from "framer-motion";
 import { C, focusRing } from "@/components/ui";
 import { useAdmin, type AdminTab } from "../context";
 import { ErrorState, PageHeading } from "../ui";
@@ -44,11 +43,12 @@ export default function AdministrationPage() {
       {adminError ? <ErrorState message={adminError} onRetry={reloadAdmin} />
         : !admin ? <AdminLoadingBody page="administration" />
         : (
-          <AnimatePresence mode="wait" initial={false}>
-            <motion.div key={route.tab} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} transition={{ duration: 0.2 }}>
-              {route.tab === "access" ? <AccessTab /> : route.tab === "directory" ? <DirectoryTab /> : route.tab === "groups" ? <GroupsTab /> : <OperationsTab />}
-            </motion.div>
-          </AnimatePresence>
+          // No wrapper fade: AccessTab, GroupsTab and OperationsTab already
+          // stagger their own cards in, and a fade-out/fade-in around that
+          // made the tab blink empty and then animate twice.
+          <div key={route.tab}>
+            {route.tab === "access" ? <AccessTab /> : route.tab === "directory" ? <DirectoryTab /> : route.tab === "groups" ? <GroupsTab /> : <OperationsTab />}
+          </div>
         )}
     </>
   );

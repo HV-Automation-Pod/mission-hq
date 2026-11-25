@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { createBrowserClient } from "@supabase/ssr";
-import { AnimatePresence, LayoutGroup, motion } from "framer-motion";
+import { AnimatePresence, motion } from "framer-motion";
 import { parseISO, startOfMonth, subDays } from "date-fns";
 import { ArrowRight, Check, CircleHelp, Lock, LogOut, Menu, X } from "lucide-react";
 import { BrandMark, Button, C, Card, Modal, PETROL_VARS, Tooltip, focusRing, pageMotion, useLightOnly, viewOf } from "@/components/ui";
@@ -162,20 +162,18 @@ export default function MemberView({ employee: loaded, dates, viewer, options, h
           </div>
         </div>
         <div className="px-6 pb-3 text-[11px] tracking-[0.14em]" style={{ color: C.muted }}>MY WORKSPACE</div>
-        <LayoutGroup id="member-nav">
-          <nav className="px-3 space-y-1" aria-label="My workspace">
-            {NAV.map(({ id, label, Icon }) => (
-              <button key={id} onClick={() => setPage(id)} aria-current={page === id ? "page" : undefined}
-                className={`relative w-full flex items-center gap-3 px-3.5 h-11 rounded-xl text-[14px] font-medium transition-colors ${page === id ? "" : "hover:bg-[#EEF3F1]"} ${focusRing}`}
-                style={{ color: page === id ? C.text : C.text2 }}>
-                {page === id && <motion.span layoutId="member-nav-active" className="absolute inset-0 rounded-xl" style={{ background: C.selected }} transition={{ type: "spring", stiffness: 420, damping: 36 }} />}
-                {page === id && <span className="absolute left-0 top-2.5 bottom-2.5 w-[3px] rounded-r" style={{ background: C.primary }} />}
-                <Icon size={18} className="relative flex-shrink-0" />
-                <span className="relative whitespace-nowrap">{label}</span>
-              </button>
-            ))}
-          </nav>
-        </LayoutGroup>
+        <nav className="px-3 space-y-1" aria-label="My workspace">
+          {NAV.map(({ id, label, Icon }) => (
+            <button key={id} onClick={() => setPage(id)} aria-current={page === id ? "page" : undefined}
+              className={`relative w-full flex items-center gap-3 px-3.5 h-11 rounded-xl text-[14px] font-medium transition-colors ${page === id ? "" : "hover:bg-[#EEF3F1]"} ${focusRing}`}
+              style={{ color: page === id ? C.text : C.text2 }}>
+              {page === id && <span className="absolute inset-0 rounded-xl" style={{ background: C.selected }} />}
+              {page === id && <span className="absolute left-0 top-2.5 bottom-2.5 w-[3px] rounded-r" style={{ background: C.primary }} />}
+              <Icon size={18} className="relative flex-shrink-0" />
+              <span className="relative whitespace-nowrap">{label}</span>
+            </button>
+          ))}
+        </nav>
         <div className="mt-auto p-3 space-y-3">
           <div className="rounded-2xl p-4" style={{ background: C.surface, border: `1px solid ${C.border}` }}>
             <div className="flex items-center gap-2 text-[13px] font-medium"><Lock size={14} /> Your own record</div>
@@ -257,16 +255,14 @@ export default function MemberView({ employee: loaded, dates, viewer, options, h
 
       {/* ── Tab bar (phone) ── */}
       <nav className="lg:hidden fixed bottom-0 inset-x-0 z-40 grid grid-cols-4 gap-2 p-3" style={{ background: C.canvas, borderTop: `1px solid ${C.border}` }} aria-label="My workspace">
-        <LayoutGroup id="member-tabs">
-          {NAV.map(({ id, label, Icon }) => (
-            <button key={id} onClick={() => setPage(id)} aria-current={page === id ? "page" : undefined}
-              className={`relative flex flex-col items-center justify-center gap-0.5 rounded-xl h-[52px] text-[11px] font-medium ${focusRing}`}
-              style={page === id ? { color: C.primary } : { background: C.surface, color: C.text2, border: `1px solid ${C.border}` }}>
-              {page === id && <motion.span layoutId="member-tab-active" className="absolute inset-0 rounded-xl" style={{ background: C.selected }} transition={{ type: "spring", stiffness: 420, damping: 36 }} />}
-              <Icon size={16} className="relative" /> <span className="relative">{id === "attendance" ? "Attendance" : label}</span>
-            </button>
-          ))}
-        </LayoutGroup>
+        {NAV.map(({ id, label, Icon }) => (
+          <button key={id} onClick={() => setPage(id)} aria-current={page === id ? "page" : undefined}
+            className={`relative flex flex-col items-center justify-center gap-0.5 rounded-xl h-[52px] text-[11px] font-medium ${focusRing}`}
+            style={page === id ? { color: C.primary } : { background: C.surface, color: C.text2, border: `1px solid ${C.border}` }}>
+            {page === id && <span className="absolute inset-0 rounded-xl" style={{ background: C.selected }} />}
+            <Icon size={16} className="relative" /> <span className="relative">{id === "attendance" ? "Attendance" : label}</span>
+          </button>
+        ))}
       </nav>
 
       <AnimatePresence>
