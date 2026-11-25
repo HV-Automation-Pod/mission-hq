@@ -12,9 +12,9 @@ import { C, EASE } from "./theme";
 
 /** A page's entrance: the whole page rises a little and fades in. */
 export const pageMotion: Variants = {
-  initial: { opacity: 0, y: 10 },
-  animate: { opacity: 1, y: 0, transition: { duration: 0.32, ease: EASE } },
-  exit: { opacity: 0, y: -6, transition: { duration: 0.16, ease: "easeIn" } },
+  initial: { opacity: 0, y: 4 },
+  animate: { opacity: 1, y: 0, transition: { duration: 0.16, ease: EASE } },
+  exit: { opacity: 0, transition: { duration: 0.06, ease: "easeIn" } },
 };
 
 const stagger: Variants = { initial: {}, animate: { transition: { staggerChildren: 0.055, delayChildren: 0.04 } } };
